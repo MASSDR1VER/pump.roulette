@@ -22,6 +22,8 @@ router = APIRouter()
 class SummonStreamersRequest(BaseModel):
     """Request model for summoning streamers to audio room."""
     stream_pair_id: str = Field(..., description="Stream pair identifier")
+    streamer_a_id: str = Field(..., description="First streamer's identifier")
+    streamer_b_id: str = Field(..., description="Second streamer's identifier")
 
 class SummonStreamersResponse(BaseModel):
     """Response model for summoning streamers."""
@@ -100,24 +102,24 @@ async def summon_streamers(
     try:
         # Create audio room for the stream pair
         room_data = await audio_service.create_audio_room(
-            stream_pair_id=request.stream_pair_id,
-            creator_wallet=current_user["wallet_address"],
-            creator_username=current_user.get("username")
+            pair_id=request.stream_pair_id,
+            streamer_a_id=request.streamer_a_id,
+            streamer_b_id=request.streamer_b_id
         )
 
         # Generate room token for the creator
         room_token = auth_service.create_audio_room_token(
             current_user["wallet_address"],
-            room_data["room_id"],
+            room_data["room_name"],  # Use room_name instead of room_id
             role="moderator"
         )
 
         return SummonStreamersResponse(
             success=True,
             message="Audio room created successfully. Waiting for streamers to join.",
-            room_id=room_data["room_id"],
+            room_id=room_data["pair_id"],  # Use pair_id as room_id
             room_token=room_token,
-            audio_endpoint=room_data["audio_endpoint"]
+            audio_endpoint=f"wss://pump-prod-tg2x8veh.livekit.cloud"  # LiveKit endpoint
         )
 
     except Exception as e:

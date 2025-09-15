@@ -51,6 +51,16 @@ def setup_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("fastapi").setLevel(logging.INFO)
 
+    # Silence WebSocket related logs
+    logging.getLogger("socketio").setLevel(logging.ERROR)
+    logging.getLogger("socketio.client").setLevel(logging.ERROR)
+    logging.getLogger("engineio").setLevel(logging.ERROR)
+    logging.getLogger("engineio.client").setLevel(logging.ERROR)
+    logging.getLogger("websocket").setLevel(logging.ERROR)
+
+    # Silence pump.fun WebSocket trade logs
+    logging.getLogger("services.pump_websocket_client").setLevel(logging.WARNING)
+
     # Log initial message
     root_logger.info(f"Logging initialized - Level: {settings.LOG_LEVEL}")
 

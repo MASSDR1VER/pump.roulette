@@ -341,7 +341,9 @@ export default function PumpRoulettePage() {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          stream_pair_id: currentStreamPair.room_id
+          stream_pair_id: currentStreamPair.room_id,
+          streamer_a_id: currentStreamPair.stream_1?.streamer_id || currentStreamPair.stream_1?.token_address || 'streamer_a',
+          streamer_b_id: currentStreamPair.stream_2?.streamer_id || currentStreamPair.stream_2?.token_address || 'streamer_b'
         })
       })
 

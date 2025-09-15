@@ -38,8 +38,8 @@ class PumpFunClient:
         """
         self.ws_url = "https://frontend-api-v3.pump.fun"
         self.sio = socketio.AsyncClient(
-            logger=True,
-            engineio_logger=True,
+            logger=False,  # Disable socketio logging
+            engineio_logger=False,  # Disable engineio logging
             reconnection=True,
             reconnection_attempts=5,
             reconnection_delay=1,
