@@ -32,6 +32,9 @@ class ChatMessage:
         content (str): The message content
         timestamp (datetime): When the message was sent
         is_system (bool): Whether this is a system message
+        profile_image (str): User's profile image URL
+        reply_to (str): ID of message being replied to
+        reactions (Dict): Message reactions
     """
     id: str
     room_id: str
@@ -40,6 +43,9 @@ class ChatMessage:
     content: str
     timestamp: datetime
     is_system: bool = False
+    profile_image: Optional[str] = None
+    reply_to: Optional[str] = None
+    reactions: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert message to dictionary for JSON serialization."""
@@ -50,7 +56,10 @@ class ChatMessage:
             "username": self.username,
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
-            "is_system": self.is_system
+            "is_system": self.is_system,
+            "profile_image": self.profile_image,
+            "reply_to": self.reply_to,
+            "reactions": self.reactions or {"likes": 0, "users_liked": []}
         }
 
 
@@ -67,6 +76,7 @@ class UserConnection:
         connected_at (datetime): When the user connected
         message_count (int): Number of messages sent (for rate limiting)
         last_message_time (datetime): Time of last message (for rate limiting)
+        profile_image (str): User's profile image URL
     """
     websocket: WebSocket
     user_id: str
@@ -75,6 +85,7 @@ class UserConnection:
     connected_at: datetime
     message_count: int = 0
     last_message_time: Optional[datetime] = None
+    profile_image: Optional[str] = None
 
     def __hash__(self):
         """Make UserConnection hashable by using user_id and connected_at."""
@@ -202,7 +213,8 @@ class WebSocketManager:
         user_id: str,
         username: str,
         room_id: str,
-        stream_pair: Any
+        stream_pair: Any,
+        profile_image: Optional[str] = None
     ) -> UserConnection:
         """
         Handle a new WebSocket connection.
@@ -225,7 +237,8 @@ class WebSocketManager:
             user_id=user_id,
             username=username,
             room_id=room_id,
-            connected_at=datetime.utcnow()
+            connected_at=datetime.utcnow(),
+            profile_image=profile_image
         )
 
         async with self._lock:
@@ -323,7 +336,8 @@ class WebSocketManager:
     async def handle_message(
         self,
         user_id: str,
-        message_content: str
+        message_content: str,
+        reply_to: Optional[str] = None
     ) -> Optional[ChatMessage]:
         """
         Process an incoming chat message.
@@ -331,6 +345,7 @@ class WebSocketManager:
         Args:
             user_id (str): Sender's user ID
             message_content (str): The message content
+            reply_to (str): ID of message being replied to
 
         Returns:
             Optional[ChatMessage]: The created message or None if rejected
@@ -372,7 +387,9 @@ class WebSocketManager:
             user_id=user_id,
             username=connection.username,
             content=message_content,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
+            profile_image=connection.profile_image,
+            reply_to=reply_to
         )
 
         # Add to room history

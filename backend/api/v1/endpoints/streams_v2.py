@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List, Dict, Any, Optional
 
 from services.stream_manager_v2 import StreamManager
+from services.livekit_client import LiveKitClient
 
 router = APIRouter()
 
@@ -117,3 +118,50 @@ async def get_stream_stats(
         Dict[str, Any]: Stream statistics
     """
     return stream_manager.get_stats()
+
+
+@router.get("/access-token/{mint_id}")
+async def get_stream_access_token(mint_id: str) -> Dict[str, Any]:
+    """
+    Get a new access token for a specific stream.
+    Each user should get their own token to allow multiple viewers.
+
+    Args:
+        mint_id (str): The token mint address (token_address)
+
+    Returns:
+        Dict containing access token and room info
+
+    Raises:
+        HTTPException: If unable to get access token
+    """
+    try:
+        livekit_client = LiveKitClient()
+
+        # Get access token from Pump.fun
+        access_token = await livekit_client.get_access_token_from_pump(mint_id)
+
+        if not access_token:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not get access token for stream {mint_id}. Stream may not be live."
+            )
+
+        # Parse the token to get room ID
+        # The room ID is usually in format "livestream:{mint_id}:{number}"
+        room_id = f"livestream:{mint_id}"
+
+        return {
+            "success": True,
+            "access_token": access_token,
+            "room_id": room_id,
+            "mint_id": mint_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get access token: {str(e)}"
+        )

@@ -7,7 +7,7 @@
 import { useState, useEffect } from 'react'
 import { useStreamPair } from '@/hooks/useStreamPair'
 import { useAuth } from '@/hooks/useAuth'
-import { useWebSocket } from '@/hooks/useWebSocket'
+import { useWebSocket, type ChatMessage } from '@/hooks/useWebSocket'
 import { useToast } from '@/components/ui/use-toast'
 import { LiveKitStream } from '@/components/LiveKitStream'
 import { ProgressBar } from '@/components/ProgressBar'
@@ -64,6 +64,8 @@ export default function PumpRoulettePage() {
   const [customRoomId, setCustomRoomId] = useState('')
   const [customStreamPair, setCustomStreamPair] = useState<any>(null)
   const [showMobileSearch, setShowMobileSearch] = useState(false)
+  const [loadingRoom, setLoadingRoom] = useState(false)
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null)
 
   // Use WebSocket for real-time chat
   const roomId = customRoomId || streamPair?.room_id || 'default'
@@ -83,6 +85,7 @@ export default function PumpRoulettePage() {
   useEffect(() => {
     // If room parameter exists, join that room
     if (roomParam) {
+      console.log('Room parameter detected:', roomParam)
       handleJoinRoom(roomParam)
       // DON'T fetch new pair when joining a room!
     } else if (!customRoomId) {
@@ -92,7 +95,7 @@ export default function PumpRoulettePage() {
     // No auto guest login - user must connect wallet
     // Force dark mode
     document.documentElement.classList.add('dark')
-  }, [])
+  }, [roomParam])
 
   // When streamPair changes (from fetchNewPair), create/update the room with full data
   useEffect(() => {
@@ -179,10 +182,12 @@ export default function PumpRoulettePage() {
   }
 
   const fetchRoomInfo = async (roomId: string) => {
+    console.log('fetchRoomInfo called for room:', roomId)
     try {
       // First check if we have stored stream data for this room
       if (typeof window !== 'undefined') {
         const storedData = localStorage.getItem(`room_streams_${roomId}`)
+        console.log('localStorage data for room:', storedData ? 'Found' : 'Not found')
         if (storedData) {
           const roomData = JSON.parse(storedData)
           console.log('Using stored room stream data:', roomData)
@@ -224,13 +229,17 @@ export default function PumpRoulettePage() {
   }
 
   const handleJoinRoom = async (roomIdToJoin: string) => {
+    console.log('handleJoinRoom called with:', roomIdToJoin)
     if (roomIdToJoin.trim()) {
+      setLoadingRoom(true)
+
       // First, set the custom room ID
       setCustomRoomId(roomIdToJoin.trim())
       setSearchQuery('')
 
       // Clear any existing stream pair to prevent mixing with random streams
       setCustomStreamPair(null)
+      console.log('Custom room ID set to:', roomIdToJoin.trim())
 
       toast({
         title: "Joining room",
@@ -289,6 +298,8 @@ export default function PumpRoulettePage() {
           })
         }
       }
+
+      setLoadingRoom(false)
     }
   }
 
@@ -367,9 +378,10 @@ export default function PumpRoulettePage() {
 
   const sendMessage = () => {
     if (newMessage.trim() && chatConnected) {
-      const success = sendChatMessage(newMessage.trim())
+      const success = sendChatMessage(newMessage.trim(), replyingTo?.id)
       if (success) {
         setNewMessage('')
+        setReplyingTo(null) // Clear reply state after sending
       } else {
         toast({
           title: "Failed to send message",
@@ -719,6 +731,13 @@ export default function PumpRoulettePage() {
                   </button>
                 </div>
               </div>
+            ) : loadingRoom ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white mb-4"></div>
+                  <p className="text-gray-400">Loading room streams...</p>
+                </div>
+              </div>
             ) : currentStreamPair ? (
               <div className="flex-1 flex flex-col">
                 {/* Stream 1 */}
@@ -764,9 +783,13 @@ export default function PumpRoulettePage() {
                 {!msg.is_system && (
                   <div className="relative">
                     <img
-                      src="https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=30&img-dpr=2&img-onerror=redirect"
+                      src={msg.profile_image || `https://ui-avatars.com/api/?name=${msg.username}&background=666&color=fff&size=64&rounded=true`}
                       alt={msg.username}
                       className="w-7 h-7 rounded-full flex-shrink-0 mt-0.5 border border-[#25262b] group-hover:border-[#7DE2A1] transition-colors"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement
+                        target.src = `https://ui-avatars.com/api/?name=${msg.username}&background=666&color=fff&size=64&rounded=true`
+                      }}
                     />
                     {/* Wallet connected indicator for real users */}
                     {msg.user_id !== 'system' && !msg.user_id.startsWith('guest_') && (
@@ -813,11 +836,20 @@ export default function PumpRoulettePage() {
                       {/* Message reactions/actions for wallet users */}
                       {isWalletConnected && (
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity mt-1 flex items-center gap-2">
-                          <button className="text-xs text-gray-500 hover:text-white transition-colors">
+                          <button
+                            onClick={() => setReplyingTo(msg)}
+                            className="text-xs text-gray-500 hover:text-white transition-colors"
+                          >
                             Reply
                           </button>
-                          <button className="text-xs text-gray-500 hover:text-red-400 transition-colors">
-                            ❤️
+                          <button
+                            onClick={() => {
+                              // TODO: Implement like functionality
+                              console.log('Like message:', msg.id)
+                            }}
+                            className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                          >
+                            ❤️ {msg.reactions?.likes || 0}
                           </button>
                         </div>
                       )}
@@ -861,6 +893,24 @@ export default function PumpRoulettePage() {
                     </span>
                   </div>
                 </div>
+                {/* Reply indicator */}
+                {replyingTo && (
+                  <div className="mb-2 px-3 py-2 bg-[#25262b] rounded-sm flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400">Replying to</span>
+                      <span className="text-xs text-white font-medium">{replyingTo.username}</span>
+                      <span className="text-xs text-gray-500 truncate max-w-[200px]">
+                        {replyingTo.content}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setReplyingTo(null)}
+                      className="text-gray-400 hover:text-white"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
                 <form
                   onSubmit={(e) => {
                     e.preventDefault()

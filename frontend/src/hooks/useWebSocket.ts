@@ -9,6 +9,12 @@ export interface ChatMessage {
   content: string
   timestamp: string
   is_system?: boolean
+  profile_image?: string
+  reply_to?: string
+  reactions?: {
+    likes: number
+    users_liked: string[]
+  }
 }
 
 interface WebSocketMessage {
@@ -45,11 +51,13 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       if (user && isWalletConnected && user.wallet_address) {
         wsUrl.searchParams.set('user_id', user.wallet_address)
         wsUrl.searchParams.set('username', user.display_name || user.username || user.wallet_address.slice(0, 8))
+        wsUrl.searchParams.set('profile_image', user.profile_image || `https://ui-avatars.com/api/?name=${user.display_name}&background=666&color=fff&size=64&rounded=true`)
         console.log('Connecting as authenticated user:', user.display_name || user.username)
       } else {
         // Guest user
         const guestName = `Guest_${Date.now().toString().slice(-6)}`
         wsUrl.searchParams.set('username', guestName)
+        wsUrl.searchParams.set('profile_image', `https://ui-avatars.com/api/?name=${guestName}&background=666&color=fff&size=64&rounded=true`)
         console.log('Connecting as guest:', guestName)
       }
 
@@ -180,7 +188,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     setUserCount(0)
   }, [socket])
 
-  const sendMessage = useCallback((content: string) => {
+  const sendMessage = useCallback((content: string, replyTo?: string) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       console.error('WebSocket not connected, state:', socket?.readyState)
       return false
@@ -193,7 +201,8 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     try {
       const message = {
         type: 'message',
-        content: content.trim()
+        content: content.trim(),
+        reply_to: replyTo
       }
       console.log('Sending message:', message)
       socket.send(JSON.stringify(message))

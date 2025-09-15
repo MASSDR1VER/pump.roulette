@@ -208,7 +208,8 @@ async def websocket_endpoint(
     user_id: Optional[str] = Query(None),
     username: Optional[str] = Query(None),
     stream_1: Optional[str] = Query(None),
-    stream_2: Optional[str] = Query(None)
+    stream_2: Optional[str] = Query(None),
+    profile_image: Optional[str] = Query(None)
 ):
     """
     WebSocket endpoint for real-time chat.
@@ -247,6 +248,11 @@ async def websocket_endpoint(
             # No stream data provided, will use what's stored in websocket manager
             stream_pair = None
 
+        # Generate default profile image if not provided
+        if not profile_image:
+            # Create a default avatar using UI Avatars service
+            profile_image = f"https://ui-avatars.com/api/?name={username}&background=666&color=fff&size=64&rounded=true"
+
         # Connect to the chat room
         logger.info(f"Attempting to connect to WebSocket manager for room {room_id}")
         connection = await websocket_manager.connect(
@@ -254,7 +260,8 @@ async def websocket_endpoint(
             user_id=user_id,
             username=username,
             room_id=room_id,
-            stream_pair=stream_pair
+            stream_pair=stream_pair,
+            profile_image=profile_image
         )
         logger.info(f"Successfully connected to WebSocket manager")
 
@@ -269,8 +276,9 @@ async def websocket_endpoint(
                 # Process message
                 if data.get("type") == "message":
                     content = data.get("content", "").strip()
+                    reply_to = data.get("reply_to")
                     if content:
-                        await websocket_manager.handle_message(user_id, content)
+                        await websocket_manager.handle_message(user_id, content, reply_to=reply_to)
 
                 elif data.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})
