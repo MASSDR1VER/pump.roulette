@@ -11,6 +11,7 @@ import { useWebSocket } from '@/hooks/useWebSocket'
 import { useToast } from '@/components/ui/use-toast'
 import { LiveKitStream } from '@/components/LiveKitStream'
 import { ProgressBar } from '@/components/ProgressBar'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Shuffle,
   Volume2,
@@ -27,7 +28,9 @@ import {
   Search,
   Plus,
   TrendingUp,
-  Zap
+  Zap,
+  Menu,
+  X
 } from 'lucide-react'
 
 interface Message {
@@ -44,6 +47,11 @@ export default function PumpRoulettePage() {
   const { streamPair, loading, error, fetchNewPair } = useStreamPair()
   const { user, connectWallet, loginAsGuest, logout, isConnecting, error: authError, isWalletConnected } = useAuth()
   const { toast } = useToast()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // Check for room parameter in URL
+  const roomParam = searchParams.get('room')
 
   // State declarations
   const [audioEnabled, setAudioEnabled] = useState(false)
@@ -55,12 +63,14 @@ export default function PumpRoulettePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [customRoomId, setCustomRoomId] = useState('')
   const [customStreamPair, setCustomStreamPair] = useState<any>(null)
+  const [showMobileSearch, setShowMobileSearch] = useState(false)
 
   // Use WebSocket for real-time chat
   const roomId = customRoomId || streamPair?.room_id || 'default'
 
   // Use custom stream pair if in custom room, otherwise use default
-  const currentStreamPair = customStreamPair || streamPair
+  // IMPORTANT: Don't fallback to random streamPair when in a custom room
+  const currentStreamPair = customRoomId ? customStreamPair : streamPair
 
   const {
     messages: wsMessages,
@@ -71,11 +81,49 @@ export default function PumpRoulettePage() {
   } = useWebSocket(roomId, currentStreamPair)
 
   useEffect(() => {
-    fetchNewPair()
+    // If room parameter exists, join that room
+    if (roomParam) {
+      handleJoinRoom(roomParam)
+      // DON'T fetch new pair when joining a room!
+    } else if (!customRoomId) {
+      // Only fetch new pair if not in a custom room
+      fetchNewPair()
+    }
     // No auto guest login - user must connect wallet
     // Force dark mode
     document.documentElement.classList.add('dark')
   }, [])
+
+  // When streamPair changes (from fetchNewPair), create/update the room with full data
+  useEffect(() => {
+    if (streamPair && !customRoomId && streamPair.room_id) {
+      // This is a random pair, create/update the room with full stream data
+      const createRoomWithStreams = async () => {
+        try {
+          const response = await fetch('http://localhost:8000/api/v1/chat/room/create', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              room_id: streamPair.room_id, // Use the room_id from the stream pair
+              stream_1: streamPair.stream_1,
+              stream_2: streamPair.stream_2
+            })
+          })
+
+          const data = await response.json()
+          if (data.success) {
+            console.log('Room created/updated with stream data:', data)
+          }
+        } catch (error) {
+          console.error('Failed to create room with streams:', error)
+        }
+      }
+
+      createRoomWithStreams()
+    }
+  }, [streamPair, customRoomId])
 
   // Show auth errors
   useEffect(() => {
@@ -132,6 +180,22 @@ export default function PumpRoulettePage() {
 
   const fetchRoomInfo = async (roomId: string) => {
     try {
+      // First check if we have stored stream data for this room
+      if (typeof window !== 'undefined') {
+        const storedData = localStorage.getItem(`room_streams_${roomId}`)
+        if (storedData) {
+          const roomData = JSON.parse(storedData)
+          console.log('Using stored room stream data:', roomData)
+          const fullStreamPair = {
+            room_id: roomId,
+            stream_1: roomData.stream_1,
+            stream_2: roomData.stream_2
+          }
+          setCustomStreamPair(fullStreamPair)
+          return { stream_pair: fullStreamPair, room_active: true }
+        }
+      }
+
       const response = await fetch(`http://localhost:8000/api/v1/chat/room/${roomId}/info`)
       const data = await response.json()
 
@@ -142,7 +206,7 @@ export default function PumpRoulettePage() {
           setCustomStreamPair(data.stream_pair)
           return { stream_pair: data.stream_pair, room_active: data.room_active }
         } else {
-          // Room exists but no stream pair - this shouldn't happen now
+          // Room exists but no stream pair - DO NOT use current random stream pair
           setCustomStreamPair(null)
           return { stream_pair: null, room_active: data.room_active }
         }
@@ -161,8 +225,12 @@ export default function PumpRoulettePage() {
 
   const handleJoinRoom = async (roomIdToJoin: string) => {
     if (roomIdToJoin.trim()) {
+      // First, set the custom room ID
       setCustomRoomId(roomIdToJoin.trim())
       setSearchQuery('')
+
+      // Clear any existing stream pair to prevent mixing with random streams
+      setCustomStreamPair(null)
 
       toast({
         title: "Joining room",
@@ -172,32 +240,49 @@ export default function PumpRoulettePage() {
       // Try to fetch stream pair for this room
       const roomData = await fetchRoomInfo(roomIdToJoin.trim())
 
-      if (roomData === null) {
-        // API request failed
-        toast({
-          title: "Failed to join room",
-          description: "Could not connect to room. Please try again.",
-          variant: "destructive"
-        })
-        setCustomRoomId('') // Reset
-        return
-      }
+      if (roomData && roomData.stream_pair && roomData.stream_pair.stream_1 && roomData.stream_pair.stream_2) {
+        // We have full stream data for this room
+        setCustomStreamPair(roomData.stream_pair)
 
-      if (roomData.stream_pair) {
+        // Store the stream data for this room in localStorage
+        if (typeof window !== 'undefined') {
+          const roomStreamData = {
+            room_id: roomIdToJoin.trim(),
+            stream_1: roomData.stream_pair.stream_1,
+            stream_2: roomData.stream_pair.stream_2,
+            timestamp: new Date().toISOString()
+          }
+          localStorage.setItem(`room_streams_${roomIdToJoin.trim()}`, JSON.stringify(roomStreamData))
+        }
+
         toast({
           title: "Room joined",
-          description: `Viewing ${roomData.stream_pair.stream_1?.symbol} vs ${roomData.stream_pair.stream_2?.symbol}`,
+          description: `Viewing ${roomData.stream_pair.stream_1?.symbol || roomData.stream_pair.stream_1?.token_name} vs ${roomData.stream_pair.stream_2?.symbol || roomData.stream_pair.stream_2?.token_name}`,
         })
       } else {
-        // If no stream pair found, use current stream pair for this room
-        // This ensures all users in the same room see the same streams
-        if (streamPair) {
-          setCustomStreamPair(streamPair)
-          toast({
-            title: "Room joined",
-            description: `Now viewing ${streamPair.stream_1?.symbol} vs ${streamPair.stream_2?.symbol}`,
-          })
-        } else {
+        // Room doesn't have stored stream data yet
+        // Try to get it from active rooms list
+        try {
+          const roomsResponse = await fetch('http://localhost:8000/api/v1/chat/rooms')
+          const roomsData = await roomsResponse.json()
+
+          if (roomsData.success && roomsData.rooms) {
+            const targetRoom = roomsData.rooms.find((r: any) => r.room_id === roomIdToJoin.trim())
+            if (targetRoom && targetRoom.stream_pair) {
+              setCustomStreamPair(targetRoom.stream_pair)
+              toast({
+                title: "Room joined",
+                description: `Found active room with streams`,
+              })
+            } else {
+              toast({
+                title: "Room joined",
+                description: `Connected to room ${roomIdToJoin.slice(0, 8)}... No stream data available yet.`,
+              })
+            }
+          }
+        } catch (error) {
+          console.error('Failed to fetch room list:', error)
           toast({
             title: "Room joined",
             description: `Connected to room ${roomIdToJoin.slice(0, 8)}...`,
@@ -272,8 +357,12 @@ export default function PumpRoulettePage() {
   const handleNextPair = async () => {
     setAudioEnabled(false)
     setMicEnabled(false)
+    setCustomRoomId('') // Clear custom room
+    setCustomStreamPair(null) // Clear custom stream pair
     await fetchNewPair()
-    // WebSocket will automatically reconnect to new room via useWebSocket hook
+
+    // After fetching new pair, store it in the backend for the room
+    // This will be done when WebSocket connects with stream data
   }
 
   const sendMessage = () => {
@@ -300,16 +389,21 @@ export default function PumpRoulettePage() {
       <ProgressBar isLoading={loading} />
       {/* Header - pump.fun style */}
       <header className="h-14 bg-[#181821] border-b border-[#25262b] flex-shrink-0">
-        <div className="h-full px-4 flex items-center justify-between">
-          <div className="flex items-center gap-6 flex-1">
-            <div className="flex items-center gap-3">
-              <div className="text-[#7DE2A1] font-bold text-xl">
+        <div className="h-full px-2 sm:px-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-6 flex-1">
+            <div className="flex items-center gap-2">
+              <img
+                src="/logo.png"
+                alt="Pump Roulette"
+                className="h-5 sm:h-6 w-5 sm:w-6"
+              />
+              <div className="text-white font-bold text-base sm:text-xl">
                 Pump.roulette
               </div>
             </div>
 
-            {/* Room Search Bar */}
-            <div className="flex-1 max-w-md">
+            {/* Room Search Bar - Desktop */}
+            <div className="hidden sm:block flex-1 max-w-md">
               <form onSubmit={handleSearchSubmit} className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
@@ -317,12 +411,12 @@ export default function PumpRoulettePage() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Enter Room ID to join (e.g. 3w7h8ZJ5...)"
-                  className="w-full pl-10 pr-20 py-2 bg-[#25262b] border border-[#2a2b30] rounded-lg text-sm text-white placeholder:text-gray-500 focus:border-[#7DE2A1] focus:outline-none transition-colors"
+                  className="w-full pl-10 pr-20 py-2 bg-[#15161B] border border-[#2E3036] rounded-full text-sm text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors"
                 />
                 {searchQuery.trim() && (
                   <button
                     type="submit"
-                    className="absolute right-2 top-1/2 transform -translate-y-1/2 px-2 py-1 bg-[#7DE2A1] hover:bg-[#6dd291] text-black rounded text-xs font-medium transition-colors"
+                    className="absolute right-2 top-1/2 transform -translate-y-1/2 px-2 py-1 bg-white hover:bg-gray-100 text-black rounded-full text-xs font-medium transition-colors"
                   >
                     Join
                   </button>
@@ -330,23 +424,28 @@ export default function PumpRoulettePage() {
               </form>
             </div>
 
-            <nav className="hidden md:flex items-center gap-4">
-              <button className="text-sm text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                <TrendingUp className="h-3 w-3" />
-                Trending
-              </button>
-              <button className="text-sm text-gray-400 hover:text-white transition-colors">New</button>
-              <button className="px-3 py-1.5 bg-[#7DE2A1] hover:bg-[#6dd291] text-black rounded-lg text-sm font-semibold flex items-center gap-1 transition-all">
-                <Plus className="h-3 w-3" />
-                Create coin
-              </button>
-            </nav>
+            {/* Mobile Search Button */}
+            <button
+              onClick={() => setShowMobileSearch(!showMobileSearch)}
+              className="sm:hidden p-1.5 bg-[#25262b] hover:bg-[#2a2b30] rounded-sm transition-colors"
+            >
+              {showMobileSearch ? <X className="h-4 w-4 text-gray-400" /> : <Search className="h-4 w-4 text-gray-400" />}
+            </button>
+
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <button
+              onClick={() => router.push('/rooms')}
+              className="px-2 sm:px-3 py-1 bg-[#25262b] hover:bg-[#2a2b30] text-white rounded-sm text-xs font-medium transition-colors flex items-center gap-1"
+            >
+              <Users className="h-3 w-3" />
+              <span className="hidden sm:inline">View Rooms</span>
+            </button>
+
+            <div className="hidden sm:flex items-center gap-2">
               <span className="text-xs text-gray-500">
-                Room: <span className="text-[#7DE2A1] font-mono">{roomId.slice(0, 8)}</span>
+                Room: <span className="text-white font-mono">{roomId.slice(0, 8)}</span>
               </span>
               {customRoomId && (
                 <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded">
@@ -358,26 +457,29 @@ export default function PumpRoulettePage() {
             {customRoomId ? (
               <button
                 onClick={handleBackToRandomRoom}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-lg text-sm flex items-center gap-2 transition-all"
+                className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-sm text-xs sm:text-sm flex items-center gap-1 sm:gap-2 transition-all"
               >
-                <Shuffle className="h-4 w-4" />
-                Back to Random
+                <Shuffle className="h-3 sm:h-4 w-3 sm:w-4" />
+                <span className="hidden sm:inline">Back to Random</span>
+                <span className="sm:hidden">Back</span>
               </button>
             ) : (
               <button
                 onClick={handleNextPair}
                 disabled={loading}
-                className="px-4 py-2 bg-[#7DE2A1] hover:bg-[#6dd291] disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold rounded-lg text-sm flex items-center gap-2 transition-all"
+                className="px-2 sm:px-3 py-1 sm:py-1.5 bg-[#83EFAA] hover:bg-[#73df9a] disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold rounded-sm text-xs sm:text-sm flex items-center gap-1 sm:gap-2 transition-all"
               >
               {loading ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Finding...
+                  <Loader2 className="h-3 sm:h-4 w-3 sm:w-4 animate-spin" />
+                  <span className="hidden sm:inline">Finding...</span>
+                  <span className="sm:hidden">...</span>
                 </>
               ) : (
                 <>
-                  <Shuffle className="h-4 w-4" />
-                  Next Pair
+                  <Shuffle className="h-3 sm:h-4 w-3 sm:w-4" />
+                  <span className="hidden sm:inline">Next Pair</span>
+                  <span className="sm:hidden">Next</span>
                 </>
               )}
             </button>
@@ -390,25 +492,25 @@ export default function PumpRoulettePage() {
                   handleProfileClick()
                 }}
                 disabled={isConnecting}
-                className="px-4 py-2 bg-[#25262b] hover:bg-[#2a2b30] disabled:opacity-50 text-white border border-[#2a2b30] rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+                className="px-1.5 sm:px-2 py-1 bg-[#25262b] hover:bg-[#2a2b30] disabled:opacity-50 text-white border border-[#2a2b30] rounded-sm text-xs font-medium transition-all flex items-center gap-1"
               >
                 {isConnecting ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Connecting...
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <span className="hidden sm:inline">...</span>
                   </>
                 ) : user && isWalletConnected ? (
                   <>
                     <img
-                      src={user.profile_image}
+                      src="https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=32&img-dpr=2&img-onerror=redirect"
                       alt={user.display_name}
-                      className="w-5 h-5 rounded-full"
+                      className="w-4 h-4 rounded-full"
                     />
-                    {user.display_name || user.username}
+                    <span className="hidden lg:inline text-xs">{(user.display_name || user.username).slice(0, 8)}</span>
                     {user.is_verified && (
-                      <span className="w-2 h-2 bg-[#7DE2A1] rounded-full"></span>
+                      <span className="hidden sm:block w-1.5 h-1.5 bg-white rounded-full"></span>
                     )}
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </>
@@ -420,69 +522,74 @@ export default function PumpRoulettePage() {
               {/* Profile Dropdown */}
               {showProfileDropdown && user && isWalletConnected && (
                 <div
-                  className="absolute right-0 top-full mt-2 w-64 bg-[#181821] border border-[#25262b] rounded-lg shadow-lg z-50"
+                  className="absolute right-0 top-full mt-1 w-48 bg-[#1e1f26] border border-[#2a2b35] rounded-md shadow-xl z-50"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {/* User Info */}
-                  <div className="p-4 border-b border-[#25262b]">
-                    <div className="flex items-center gap-3">
+                  {/* User Info Header */}
+                  <div className="px-3 py-2 border-b border-[#2a2b35]">
+                    <div className="flex items-center gap-2">
                       <img
-                        src={user.profile_image}
+                        src="https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=24&img-dpr=2&img-onerror=redirect"
                         alt={user.display_name}
-                        className="w-10 h-10 rounded-full"
+                        className="w-6 h-6 rounded-full"
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-medium truncate">
-                            {user.display_name || user.username}
-                          </span>
-                          {user.is_verified && (
-                            <span className="w-2 h-2 bg-[#7DE2A1] rounded-full"></span>
-                          )}
-                        </div>
-                        <div className="text-xs text-gray-400 font-mono">
-                          {user.wallet_address.slice(0, 4)}...{user.wallet_address.slice(-4)}
+                        <div className="text-white font-medium text-xs truncate">
+                          {user.display_name || user.username || user.wallet_address.slice(0, 6) + '...'}
                         </div>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Stats */}
-                  <div className="p-3 border-b border-[#25262b]">
-                    <div className="grid grid-cols-2 gap-4 text-center">
-                      <div>
-                        <div className="text-lg font-bold text-white">{user.total_calls_made}</div>
-                        <div className="text-xs text-gray-400">Calls Made</div>
-                      </div>
-                      <div>
-                        <div className="text-lg font-bold text-white">{user.follower_count}</div>
-                        <div className="text-xs text-gray-400">Followers</div>
-                      </div>
+                      <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
                     </div>
                   </div>
 
                   {/* Menu Items */}
-                  <div className="p-2">
-                    <button className="w-full px-3 py-2 text-left text-white hover:bg-[#25262b] rounded-lg text-sm transition-colors flex items-center gap-2">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="py-1">
+                    <button
+                      onClick={() => router.push('/profile')}
+                      className="w-full px-3 py-1.5 text-left text-gray-300 hover:bg-[#2a2b35] text-xs transition-colors flex items-center gap-2"
+                    >
+                      <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                       </svg>
-                      Profile Settings
-                    </button>
-                    <button className="w-full px-3 py-2 text-left text-white hover:bg-[#25262b] rounded-lg text-sm transition-colors flex items-center gap-2">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                      </svg>
-                      Wallet Details
+                      Profile
                     </button>
                     <button
-                      onClick={logout}
-                      className="w-full px-3 py-2 text-left text-red-400 hover:bg-[#25262b] rounded-lg text-sm transition-colors flex items-center gap-2"
+                      onClick={() => window.open(`https://solscan.io/account/${user.wallet_address}`, '_blank')}
+                      className="w-full px-3 py-1.5 text-left text-gray-300 hover:bg-[#2a2b35] text-xs transition-colors flex items-center gap-2"
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                      </svg>
+                      View Wallet
+                    </button>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(user.wallet_address)
+                        toast({
+                          title: "Address copied",
+                          description: "Wallet address copied to clipboard",
+                        })
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-gray-300 hover:bg-[#2a2b35] text-xs transition-colors flex items-center gap-2"
+                    >
+                      <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                      </svg>
+                      Copy address
+                    </button>
+                  </div>
+
+                  <div className="border-t border-[#2a2b35]">
+                    <button
+                      onClick={logout}
+                      className="w-full px-3 py-1.5 text-left text-red-400 hover:bg-[#2a2b35] text-xs transition-colors flex items-center gap-2"
+                    >
+                      <svg className="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                       </svg>
-                      Disconnect Wallet
+                      Log out
                     </button>
                   </div>
                 </div>
@@ -492,17 +599,41 @@ export default function PumpRoulettePage() {
         </div>
       </header>
 
+      {/* Mobile Search Bar */}
+      {showMobileSearch && (
+        <div className="sm:hidden bg-[#181821] border-b border-[#25262b] p-2">
+          <form onSubmit={handleSearchSubmit} className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Enter Room ID to join"
+              className="w-full pl-10 pr-16 py-2 bg-[#15161B] border border-[#2E3036] rounded-full text-sm text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors"
+            />
+            {searchQuery.trim() && (
+              <button
+                type="submit"
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 px-2 py-1 bg-[#7DE2A1] hover:bg-[#6dd291] text-black rounded text-xs font-medium transition-colors"
+              >
+                Join
+              </button>
+            )}
+          </form>
+        </div>
+      )}
+
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Left: Streams */}
-        <div className="flex-1 flex flex-col bg-[#15161B]">
+        <div className="flex-1 flex flex-col bg-[#15161B] min-h-0">
           {/* Control Bar */}
-          <div className="border-b border-[#25262b] px-4 py-2 flex items-center justify-between bg-[#181821]">
+          <div className="border-b border-[#25262b] px-2 sm:px-4 py-2 flex flex-col sm:flex-row items-start sm:items-center justify-between bg-[#181821] gap-2">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => audioEnabled ? setAudioEnabled(false) : handleSummonStreamers()}
                 disabled={!isWalletConnected && !audioEnabled}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                className={`px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 ${
                   audioEnabled
                     ? 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30'
                     : !isWalletConnected
@@ -527,9 +658,9 @@ export default function PumpRoulettePage() {
               {audioEnabled && isWalletConnected && (
                 <button
                   onClick={() => setMicEnabled(!micEnabled)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                  className={`px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 ${
                     micEnabled
-                      ? 'bg-[#7DE2A1]/20 text-[#7DE2A1] border border-[#7DE2A1]/30 hover:bg-[#7DE2A1]/30'
+                      ? 'bg-white/20 text-white border border-white/30 hover:bg-white/30'
                       : 'bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]'
                   }`}
                 >
@@ -548,20 +679,21 @@ export default function PumpRoulettePage() {
               )}
 
               {!isWalletConnected && (
-                <div className="px-3 py-1.5 text-xs text-gray-500 bg-[#25262b]/50 rounded-lg border border-[#2a2b30]">
+                <div className="hidden sm:block px-2 py-1 text-xs text-gray-500 bg-[#25262b]/50 rounded-sm border border-[#2a2b30]">
                   Connect wallet for audio features
                 </div>
               )}
             </div>
 
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-1.5 text-gray-400">
-                <Eye className="h-4 w-4" />
+            <div className="flex items-center gap-2 sm:gap-4 text-xs sm:text-sm">
+              <div className="flex items-center gap-1 sm:gap-1.5 text-gray-400">
+                <Eye className="h-3 sm:h-4 w-3 sm:w-4" />
                 <span>{currentStreamPair ? currentStreamPair.stream_1.viewer_count + currentStreamPair.stream_2.viewer_count : 0}</span>
               </div>
-              <div className="flex items-center gap-1.5 text-gray-400">
-                <Users className="h-4 w-4" />
-                <span>{userCount || 0} active</span>
+              <div className="flex items-center gap-1 sm:gap-1.5 text-gray-400">
+                <Users className="h-3 sm:h-4 w-3 sm:w-4" />
+                <span className="hidden sm:inline">{userCount || 0} active</span>
+                <span className="sm:hidden">{userCount || 0}</span>
               </div>
             </div>
           </div>
@@ -581,7 +713,7 @@ export default function PumpRoulettePage() {
                   <p className="text-red-400 mb-4">{error}</p>
                   <button
                     onClick={fetchNewPair}
-                    className="px-4 py-2 bg-[#55d292] hover:bg-[#4fc284] text-[#050708] font-bold rounded"
+                    className="px-3 py-1.5 bg-[#83EFAA] hover:bg-[#73df9a] text-black font-bold rounded-sm"
                   >
                     Try Again
                   </button>
@@ -614,9 +746,9 @@ export default function PumpRoulettePage() {
         </div>
 
         {/* Right: Chat - pump.fun style */}
-        <div className="w-[400px] border-l border-[#25262b] bg-[#181821] flex flex-col">
+        <div className="w-full lg:w-[400px] border-t lg:border-t-0 lg:border-l border-[#25262b] bg-[#181821] flex flex-col h-64 lg:h-auto">
           {/* Chat Header */}
-          <div className="px-4 py-3 border-b border-[#25262b] bg-[#181821]">
+          <div className="px-2 sm:px-4 py-2 sm:py-3 border-b border-[#25262b] bg-[#181821]">
             <div className="flex items-center justify-between">
               <span className="font-semibold text-sm text-white">Chat</span>
               <span className="text-xs text-gray-500">
@@ -626,19 +758,19 @@ export default function PumpRoulettePage() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 min-h-0">
             {wsMessages.map((msg) => (
               <div key={msg.id} className={`flex items-start gap-2.5 py-1 hover:bg-[#25262b]/30 rounded px-1 transition-colors group ${msg.is_system ? 'justify-center' : ''}`}>
                 {!msg.is_system && (
                   <div className="relative">
                     <img
-                      src={`https://ui-avatars.com/api/?name=${msg.username}&background=7DE2A1&color=000&size=30&rounded=true`}
+                      src="https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=30&img-dpr=2&img-onerror=redirect"
                       alt={msg.username}
                       className="w-7 h-7 rounded-full flex-shrink-0 mt-0.5 border border-[#25262b] group-hover:border-[#7DE2A1] transition-colors"
                     />
                     {/* Wallet connected indicator for real users */}
                     {msg.user_id !== 'system' && !msg.user_id.startsWith('guest_') && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-[#7DE2A1] rounded-full border border-[#181821] flex items-center justify-center">
+                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-white rounded-full border border-[#181821] flex items-center justify-center">
                         <div className="w-1.5 h-1.5 bg-black rounded-full"></div>
                       </div>
                     )}
@@ -652,11 +784,11 @@ export default function PumpRoulettePage() {
                   ) : (
                     <>
                       <div className="flex items-baseline gap-2 flex-wrap">
-                        <span className="text-[#7DE2A1] text-sm font-semibold flex items-center gap-1">
+                        <span className="text-white text-sm font-semibold flex items-center gap-1">
                           {msg.username}
                           {/* Verified badge for current user */}
                           {user && msg.user_id === user.wallet_address && user.is_verified && (
-                            <svg className="h-3 w-3 text-[#7DE2A1]" fill="currentColor" viewBox="0 0 20 20">
+                            <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
                               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                             </svg>
                           )}
@@ -681,7 +813,7 @@ export default function PumpRoulettePage() {
                       {/* Message reactions/actions for wallet users */}
                       {isWalletConnected && (
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity mt-1 flex items-center gap-2">
-                          <button className="text-xs text-gray-500 hover:text-[#7DE2A1] transition-colors">
+                          <button className="text-xs text-gray-500 hover:text-white transition-colors">
                             Reply
                           </button>
                           <button className="text-xs text-gray-500 hover:text-red-400 transition-colors">
@@ -706,7 +838,7 @@ export default function PumpRoulettePage() {
           </div>
 
           {/* Input */}
-          <div className="p-3 border-t border-[#25262b] bg-[#181821]">
+          <div className="p-2 sm:p-3 border-t border-[#25262b] bg-[#181821]">
             {isWalletConnected ? (
               <>
                 {/* Wallet user input with enhanced features */}
@@ -719,11 +851,11 @@ export default function PumpRoulettePage() {
                     />
                     <span className="text-xs text-gray-400">
                       Chatting as {user?.display_name}
-                      {user?.is_verified && <span className="text-[#7DE2A1] ml-1">✓</span>}
+                      {user?.is_verified && <span className="text-white ml-1">✓</span>}
                     </span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <div className={`w-2 h-2 rounded-full ${chatConnected ? 'bg-[#7DE2A1]' : 'bg-red-500'}`}></div>
+                    <div className={`w-2 h-2 rounded-full ${chatConnected ? 'bg-white' : 'bg-red-500'}`}></div>
                     <span className="text-xs text-gray-500">
                       {chatConnected ? 'Connected' : 'Disconnected'}
                     </span>
@@ -741,12 +873,12 @@ export default function PumpRoulettePage() {
                     onChange={(e) => setNewMessage(e.target.value)}
                     placeholder={chatConnected ? "Share your thoughts on these tokens..." : "Connecting to chat..."}
                     disabled={!chatConnected}
-                    className="flex-1 px-3 py-2 bg-[#25262b] border border-[#2a2b30] rounded-lg text-sm text-white placeholder:text-gray-500 focus:border-[#7DE2A1] focus:outline-none transition-colors disabled:opacity-50"
+                    className="flex-1 px-3 py-1.5 bg-[#15161B] border border-[#2E3036] rounded-sm text-sm text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors disabled:opacity-50"
                   />
                   <button
                     type="submit"
                     disabled={!newMessage.trim() || !chatConnected}
-                    className="px-3 py-2 bg-[#7DE2A1] hover:bg-[#6dd291] disabled:opacity-50 text-black rounded-lg font-medium transition-all"
+                    className="px-2.5 py-1.5 bg-[#83EFAA] hover:bg-[#73df9a] disabled:opacity-50 text-black rounded-sm font-medium transition-all"
                   >
                     <Send className="h-4 w-4" />
                   </button>
@@ -767,7 +899,7 @@ export default function PumpRoulettePage() {
                     <button
                       onClick={handleConnectWallet}
                       disabled={isConnecting}
-                      className="px-4 py-2 bg-[#7DE2A1] hover:bg-[#6dd291] disabled:opacity-50 text-black font-semibold rounded-lg transition-colors"
+                      className="px-3 py-1.5 bg-white hover:bg-gray-100 disabled:opacity-50 text-black font-semibold rounded-sm transition-colors"
                     >
                       {isConnecting ? 'Connecting...' : 'Connect Wallet'}
                     </button>
@@ -781,16 +913,16 @@ export default function PumpRoulettePage() {
 
       {/* Footer with live stats */}
       <footer className="h-10 bg-[#181821] border-t border-[#25262b] flex-shrink-0">
-        <div className="h-full px-4 flex items-center justify-between">
-          <div className="flex items-center gap-6 text-xs">
+        <div className="h-full px-2 sm:px-4 flex items-center justify-between overflow-x-auto">
+          <div className="flex items-center gap-3 sm:gap-6 text-xs flex-shrink-0">
             <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 bg-[#7DE2A1] rounded-full animate-pulse" />
+              <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
               <span className="text-gray-400">
                 <span className="text-white font-medium">{currentStreamPair ? currentStreamPair.stream_1.viewer_count + currentStreamPair.stream_2.viewer_count : 0}</span> viewers
               </span>
             </div>
             <div className="flex items-center gap-1.5">
-              <Activity className="h-3 w-3 text-[#7DE2A1]" />
+              <Activity className="h-3 w-3 text-white" />
               <span className="text-gray-400">
                 <span className="text-white font-medium">2</span> streams
               </span>
@@ -807,16 +939,16 @@ export default function PumpRoulettePage() {
             )}
           </div>
 
-          <div className="flex items-center gap-4 text-xs">
+          <div className="hidden sm:flex items-center gap-4 text-xs">
             {currentStreamPair && (
               <>
                 <div className="flex items-center gap-2">
                   <span className="text-gray-400">Stream 1:</span>
-                  <span className="text-[#7DE2A1] font-medium">{currentStreamPair.stream_1.symbol || currentStreamPair.stream_1.token_name}</span>
+                  <span className="text-white font-medium">{currentStreamPair.stream_1.symbol || currentStreamPair.stream_1.token_name}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-gray-400">Stream 2:</span>
-                  <span className="text-[#7DE2A1] font-medium">{currentStreamPair.stream_2.symbol || currentStreamPair.stream_2.token_name}</span>
+                  <span className="text-white font-medium">{currentStreamPair.stream_2.symbol || currentStreamPair.stream_2.token_name}</span>
                 </div>
               </>
             )}

@@ -95,19 +95,19 @@ class ChatRoom:
 
     Attributes:
         room_id (str): Unique room identifier
-        stream_pair (Tuple[str, str]): IDs of the paired streams
+        stream_pair (Dict or Tuple): Full stream data or IDs of the paired streams
         connections (Set[UserConnection]): Active connections in this room
         message_history (deque): Recent message history
         created_at (datetime): When the room was created
     """
 
-    def __init__(self, room_id: str, stream_pair: tuple):
+    def __init__(self, room_id: str, stream_pair: Any):
         """
         Initialize a new chat room.
 
         Args:
             room_id (str): Unique identifier for the room
-            stream_pair (tuple): Tuple of stream IDs being paired
+            stream_pair: Full stream data dict or tuple of stream IDs
         """
         self.room_id = room_id
         self.stream_pair = stream_pair
@@ -172,7 +172,7 @@ class WebSocketManager:
         """Initialize the WebSocket manager with empty rooms and connections."""
         self.rooms: Dict[str, ChatRoom] = {}
         self.connections: Dict[str, UserConnection] = {}
-        self.room_stream_pairs: Dict[str, tuple] = {}  # Persistent room stream storage
+        self.room_stream_pairs: Dict[str, Any] = {}  # Persistent room stream storage (full data)
         self.message_counter = 0
         self._lock = asyncio.Lock()
 
@@ -202,7 +202,7 @@ class WebSocketManager:
         user_id: str,
         username: str,
         room_id: str,
-        stream_pair: tuple
+        stream_pair: Any
     ) -> UserConnection:
         """
         Handle a new WebSocket connection.
@@ -230,10 +230,16 @@ class WebSocketManager:
 
         async with self._lock:
             # Store or retrieve stream pair for this room
-            if room_id not in self.room_stream_pairs and stream_pair and stream_pair != ("unknown", "unknown"):
-                # First time this room is created with valid stream pair
-                self.room_stream_pairs[room_id] = stream_pair
-                logger.info(f"Storing stream pair for room {room_id}: {stream_pair}")
+            if room_id not in self.room_stream_pairs and stream_pair:
+                # Handle different stream pair formats
+                if isinstance(stream_pair, dict) and "stream_1" in stream_pair:
+                    # Full stream data format
+                    self.room_stream_pairs[room_id] = stream_pair
+                    logger.info(f"Storing full stream data for room {room_id}")
+                elif isinstance(stream_pair, tuple) and stream_pair != ("unknown", "unknown"):
+                    # Legacy tuple format
+                    self.room_stream_pairs[room_id] = stream_pair
+                    logger.info(f"Storing stream pair tuple for room {room_id}: {stream_pair}")
 
             # Use stored stream pair if available
             room_stream_pair = self.room_stream_pairs.get(room_id, stream_pair)
@@ -293,10 +299,21 @@ class WebSocketManager:
                     f"{connection.username} left the chat"
                 )
 
-                # Clean up empty rooms
+                # Clean up empty rooms but keep stream pair info
                 if room.get_user_count() == 0:
+                    # Keep the stream pair info for this room
+                    if connection.room_id in self.rooms:
+                        stream_pair = self.rooms[connection.room_id].stream_pair
+                        # Preserve full stream data
+                        if stream_pair:
+                            if isinstance(stream_pair, dict) and "stream_1" in stream_pair:
+                                # Full stream data
+                                self.room_stream_pairs[connection.room_id] = stream_pair
+                            elif stream_pair != ("unknown", "unknown"):
+                                # Legacy tuple format
+                                self.room_stream_pairs[connection.room_id] = stream_pair
                     del self.rooms[connection.room_id]
-                    logger.info(f"Removed empty room: {connection.room_id}")
+                    logger.info(f"Removed empty room: {connection.room_id}, keeping stream pair")
 
             # Remove from global registry
             del self.connections[user_id]

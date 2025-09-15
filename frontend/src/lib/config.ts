@@ -12,7 +12,7 @@ export const config = {
     url: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws',
   },
   app: {
-    name: process.env.NEXT_PUBLIC_APP_NAME || 'Letgo Automation',
+    name: process.env.NEXT_PUBLIC_APP_NAME || 'Pump Roulette',
     version: process.env.NEXT_PUBLIC_APP_VERSION || '2.0.0',
   },
 } as const

@@ -30,33 +30,56 @@ export function useWebSocket(roomId: string, streamPair?: any) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
   const reconnectAttempts = useRef(0)
   const maxReconnectAttempts = 5
+  const isConnecting = useRef(false)
 
   const connect = useCallback(() => {
-    if (!roomId) return
+    if (!roomId || isConnecting.current) return
+
+    // Prevent multiple simultaneous connections
+    isConnecting.current = true
 
     try {
       // Build WebSocket URL with query parameters
       const wsUrl = new URL(`ws://localhost:8000/api/v1/chat/ws/${roomId}`)
 
-      if (user && isWalletConnected) {
+      if (user && isWalletConnected && user.wallet_address) {
         wsUrl.searchParams.set('user_id', user.wallet_address)
-        wsUrl.searchParams.set('username', user.display_name || user.username || 'User')
+        wsUrl.searchParams.set('username', user.display_name || user.username || user.wallet_address.slice(0, 8))
+        console.log('Connecting as authenticated user:', user.display_name || user.username)
       } else {
         // Guest user
-        wsUrl.searchParams.set('username', `Guest_${Date.now().toString().slice(-6)}`)
+        const guestName = `Guest_${Date.now().toString().slice(-6)}`
+        wsUrl.searchParams.set('username', guestName)
+        console.log('Connecting as guest:', guestName)
       }
 
       // Add stream pair information if available
-      if (streamPair) {
+      // We send token addresses for identification, but full data should be managed server-side
+      if (streamPair && streamPair.stream_1 && streamPair.stream_2) {
         if (streamPair.stream_1?.token_address) {
           wsUrl.searchParams.set('stream_1', streamPair.stream_1.token_address)
         }
         if (streamPair.stream_2?.token_address) {
           wsUrl.searchParams.set('stream_2', streamPair.stream_2.token_address)
         }
+        // Store full stream data in localStorage for this room
+        if (typeof window !== 'undefined') {
+          const roomStreamData = {
+            room_id: roomId,
+            stream_1: streamPair.stream_1,
+            stream_2: streamPair.stream_2,
+            timestamp: new Date().toISOString()
+          }
+          localStorage.setItem(`room_streams_${roomId}`, JSON.stringify(roomStreamData))
+        }
+      } else {
+        // No stream pair provided - joining existing room
+        wsUrl.searchParams.set('stream_1', 'unknown')
+        wsUrl.searchParams.set('stream_2', 'unknown')
       }
 
       console.log('Connecting to WebSocket:', wsUrl.toString())
+      console.log('User info:', { user, isWalletConnected })
 
       const ws = new WebSocket(wsUrl.toString())
 
@@ -65,6 +88,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
         setIsConnected(true)
         setError(null)
         reconnectAttempts.current = 0
+        isConnecting.current = false
       }
 
       ws.onmessage = (event) => {
@@ -109,14 +133,17 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       }
 
       ws.onclose = (event) => {
-        console.log('WebSocket closed:', event.code, event.reason)
+        isConnecting.current = false
+
+        if (event.code !== 1000) {
+          console.log('WebSocket closed unexpectedly:', event.code, event.reason)
+        }
         setIsConnected(false)
         setSocket(null)
 
         // Attempt to reconnect if not intentionally closed
         if (event.code !== 1000 && reconnectAttempts.current < maxReconnectAttempts) {
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
-          console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current + 1})`)
 
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectAttempts.current++
@@ -126,9 +153,8 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       }
 
       ws.onerror = (event) => {
-        console.error('WebSocket onerror event:', event)
-        console.error('WebSocket readyState:', ws.readyState)
-        console.error('WebSocket url:', wsUrl.toString())
+        // WebSocket errors don't provide much detail, connection issues will be handled by onclose
+        isConnecting.current = false
         setError('Connection error')
       }
 
@@ -136,10 +162,12 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     } catch (err) {
       console.error('Failed to create WebSocket connection:', err)
       setError('Failed to connect')
+      isConnecting.current = false
     }
-  }, [roomId, user, isWalletConnected, streamPair])
+  }, [roomId, user, isWalletConnected])
 
   const disconnect = useCallback(() => {
+    isConnecting.current = false
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
     }
@@ -184,14 +212,27 @@ export function useWebSocket(roomId: string, streamPair?: any) {
 
   // Connect when hook is initialized or dependencies change
   useEffect(() => {
-    if (roomId) {
-      connect()
+    if (roomId && roomId !== 'default') {
+      // Disconnect first if already connected (to reconnect with new user info)
+      if (socket) {
+        disconnect()
+      }
+
+      // Only connect if we have a valid room ID
+      const timer = setTimeout(() => {
+        connect()
+      }, 100) // Small delay to ensure everything is ready
+
+      return () => {
+        clearTimeout(timer)
+        disconnect()
+      }
     }
 
     return () => {
       disconnect()
     }
-  }, [roomId])
+  }, [roomId, user?.wallet_address, isWalletConnected])
 
   // Cleanup on unmount
   useEffect(() => {

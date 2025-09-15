@@ -4,22 +4,70 @@ Chat Endpoints V2
 Improved WebSocket implementation for real-time chat.
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-from typing import Optional
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
+from typing import Optional, Dict, Any
+from pydantic import BaseModel
 import uuid
+import json
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class RoomCreationRequest(BaseModel):
+    """Request model for creating a room with stream data."""
+    room_id: str
+    stream_1: Dict[str, Any]
+    stream_2: Dict[str, Any]
+
+
+@router.post("/room/create")
+async def create_room_with_streams(request: RoomCreationRequest):
+    """
+    Create or update a room with full stream data.
+
+    This endpoint stores the complete stream data for a room,
+    ensuring all users in the room see the same streams.
+    """
+    try:
+        from main import app
+        websocket_manager = app.state.websocket_manager
+
+        # Store the full stream data for this room
+        stream_pair = {
+            "room_id": request.room_id,
+            "stream_1": request.stream_1,
+            "stream_2": request.stream_2
+        }
+
+        # Store in the persistent room stream pairs
+        websocket_manager.room_stream_pairs[request.room_id] = stream_pair
+
+        logger.info(f"Created/updated room {request.room_id} with full stream data")
+
+        return {
+            "success": True,
+            "room_id": request.room_id,
+            "message": "Room created with stream data",
+            "stream_pair": stream_pair
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to create room: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 @router.get("/rooms")
 async def get_active_rooms():
     """
-    Get list of active chat rooms.
+    Get list of active chat rooms with full stream data.
 
     Returns:
-        List of active rooms with user counts and basic info
+        List of active rooms with user counts and full stream info
     """
     try:
         from main import app
@@ -28,9 +76,32 @@ async def get_active_rooms():
         # Get all room stats
         all_stats = websocket_manager.get_all_stats()
 
+        # Enhance room data with full stream information
+        enhanced_rooms = []
+        for room in all_stats.get("rooms", []):
+            if room:
+                # Check if stream_pair exists and has full data
+                if room.get("stream_pair"):
+                    # If it's already full data (dict with stream_1/stream_2), use as is
+                    if isinstance(room["stream_pair"], dict) and "stream_1" in room["stream_pair"]:
+                        enhanced_rooms.append(room)
+                    # If it's a tuple (token addresses), skip for now
+                    # In production, you'd fetch full data from token addresses
+                    elif isinstance(room["stream_pair"], (list, tuple)):
+                        # For now, just include basic room info
+                        room["stream_pair"] = {
+                            "stream_1": {"token_address": room["stream_pair"][0] if len(room["stream_pair"]) > 0 else None},
+                            "stream_2": {"token_address": room["stream_pair"][1] if len(room["stream_pair"]) > 1 else None}
+                        }
+                        enhanced_rooms.append(room)
+                    else:
+                        enhanced_rooms.append(room)
+                else:
+                    enhanced_rooms.append(room)
+
         return {
             "success": True,
-            "rooms": all_stats.get("rooms", []),
+            "rooms": enhanced_rooms,
             "total_users": all_stats.get("total_users", 0),
             "total_rooms": all_stats.get("total_rooms", 0)
         }
@@ -66,11 +137,12 @@ async def get_room_info(room_id: str):
         # Check persistent room stream pairs first
         if room_id in websocket_manager.room_stream_pairs:
             stored_pair = websocket_manager.room_stream_pairs[room_id]
-            logger.info(f"Found stored stream pair for room {room_id}: {stored_pair}")
-            # Convert tuple to dict format if needed
-            if isinstance(stored_pair, tuple) and len(stored_pair) == 2:
-                # For now, return the stored tuple as is
-                # In a real implementation, you'd fetch full stream data
+            logger.info(f"Found stored stream pair for room {room_id}")
+            # Use the stored data directly if it's already full stream data
+            if isinstance(stored_pair, dict) and "stream_1" in stored_pair:
+                stream_pair = stored_pair
+            elif isinstance(stored_pair, tuple) and len(stored_pair) == 2:
+                # Legacy tuple format - convert to basic dict
                 stream_pair = {"stream_1": {"token_address": stored_pair[0]}, "stream_2": {"token_address": stored_pair[1]}}
 
         # Fallback: check active stream pairs
@@ -109,9 +181,16 @@ async def get_room_info(room_id: str):
             }
         else:
             # Room doesn't exist and no stream pair
+            # This is fine - room will be created when first user joins
             return {
-                "success": False,
-                "error": "Room not found"
+                "success": True,
+                "room_id": room_id,
+                "user_count": 0,
+                "message_count": 0,
+                "created_at": None,
+                "stream_pair": None,
+                "room_active": False,
+                "message": "Room will be created when first user joins"
             }
 
     except Exception as e:
@@ -158,8 +237,15 @@ async def websocket_endpoint(
         app = scope["app"]
         websocket_manager = app.state.websocket_manager
 
-        # Create stream pair tuple
-        stream_pair = (stream_1 or "unknown", stream_2 or "unknown")
+        # Try to get full stream data if we have room_id
+        stream_pair = None
+        if stream_1 and stream_2 and stream_1 != "unknown" and stream_2 != "unknown":
+            # We have token addresses, but we should try to get full stream data
+            # For now, we'll pass the tuple, but ideally we'd fetch full stream data here
+            stream_pair = (stream_1, stream_2)
+        else:
+            # No stream data provided, will use what's stored in websocket manager
+            stream_pair = None
 
         # Connect to the chat room
         logger.info(f"Attempting to connect to WebSocket manager for room {room_id}")

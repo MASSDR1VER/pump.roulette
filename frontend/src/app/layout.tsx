@@ -12,8 +12,16 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: config.app.name,
-  description: "Professional Letgo listing automation and management platform",
+  title: "Pump Roulette",
+  description: "Random pump.fun stream pairing with real-time chat",
+  icons: {
+    icon: [
+      { url: '/logo.png', type: 'image/png' },
+      { url: '/favicon.ico', type: 'image/x-icon' }
+    ],
+    shortcut: '/logo.png',
+    apple: '/logo.png',
+  },
 };
 
 export default function RootLayout({

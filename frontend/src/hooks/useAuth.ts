@@ -38,6 +38,10 @@ export function useAuth() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Compute isWalletConnected based on user state
+  // A wallet is connected if user exists, has wallet_address, and it's not a guest wallet
+  const isWalletConnected = !!(user && user.wallet_address && !user.wallet_address.startsWith('guest_'))
+
   // Check for existing session on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -246,6 +250,6 @@ export function useAuth() {
     loginAsGuest,
     logout,
     isAuthenticated: !!user,
-    isWalletConnected: !!(user && user.wallet_address && !user.wallet_address.startsWith('guest_'))
+    isWalletConnected  // Use the computed value from above
   }
 }
