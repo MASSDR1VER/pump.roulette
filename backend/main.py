@@ -1,0 +1,143 @@
+"""
+PumpRoulette Backend Application
+Main entry point for the FastAPI application that powers PumpRoulette.
+
+This module initializes the FastAPI app, configures middleware, sets up routes,
+and manages the WebSocket connections for real-time chat functionality.
+"""
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import uvicorn
+import logging
+from typing import AsyncGenerator
+from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
+
+from config.settings import settings
+from api.v1.router import api_router
+from services.websocket_manager import WebSocketManager
+from services.stream_manager_v2 import StreamManager
+from services.audio_room_service import AudioRoomService
+from models.user import User
+from utils.logger import setup_logging
+
+# Initialize logging
+setup_logging()
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator:
+    """
+    Manages the application lifecycle, handling startup and shutdown events.
+
+    Args:
+        app (FastAPI): The FastAPI application instance
+
+    Yields:
+        None: Control back to the application
+    """
+    # Startup
+    logger.info("Starting PumpRoulette backend server...")
+
+    # Initialize MongoDB and Beanie
+    try:
+        client = AsyncIOMotorClient(settings.MONGODB_URL)
+        database = client[settings.MONGODB_DB_NAME]
+
+        # Initialize Beanie with User model
+        await init_beanie(database=database, document_models=[User])
+        logger.info("Database and Beanie initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        raise
+
+    # Initialize services
+    app.state.stream_manager = StreamManager()
+    app.state.websocket_manager = WebSocketManager()
+    app.state.audio_room_service = AudioRoomService()
+
+    # Start background tasks
+    await app.state.stream_manager.initialize()
+
+    logger.info("PumpRoulette backend started successfully")
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down PumpRoulette backend...")
+    await app.state.stream_manager.cleanup()
+    await app.state.websocket_manager.cleanup()
+    logger.info("PumpRoulette backend shutdown complete")
+
+
+# Create FastAPI application instance
+app = FastAPI(
+    title="PumpRoulette API",
+    description="Backend API for PumpRoulette - Random Pump.fun stream pairing platform",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Configure CORS middleware for frontend communication
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API routes
+app.include_router(api_router, prefix="/api/v1")
+
+
+@app.get("/")
+async def root():
+    """
+    Root endpoint providing basic API information.
+
+    Returns:
+        dict: API status and version information
+    """
+    return {
+        "name": "PumpRoulette API",
+        "version": "1.0.0",
+        "status": "operational",
+        "documentation": "/docs"
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for monitoring and load balancer checks.
+
+    Returns:
+        dict: Health status of the application
+    """
+    return {
+        "status": "healthy",
+        "services": {
+            "stream_manager": "operational",
+            "websocket": "operational",
+            "database": "operational",
+            "audio_room": "operational"
+        }
+    }
+
+
+if __name__ == "__main__":
+    """
+    Run the application using Uvicorn ASGI server.
+    This is for development purposes. In production, use a proper ASGI server.
+    """
+    uvicorn.run(
+        "main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.DEBUG,
+        log_level="debug" if settings.DEBUG else "info"
+    )
