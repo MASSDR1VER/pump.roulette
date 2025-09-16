@@ -192,6 +192,7 @@ class AudioRoomService:
 
         return token
 
+
     async def get_room_info(self, pair_id: str) -> Optional[Dict[str, Any]]:
         """
         Get information about an audio room.

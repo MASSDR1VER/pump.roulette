@@ -27,6 +27,7 @@ interface ParticipantInfo {
 }
 
 export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pump-udxzob1q.livekit.cloud', onDisconnect, onParticipantsChange }: AudioRoomProps) {
+  console.log('AudioRoom component mounted with:', { roomId, token: token ? 'exists' : 'null', role, livekitUrl })
   const [room, setRoom] = useState<Room | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
@@ -375,7 +376,7 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
       </div>
 
       {/* Controls */}
-      {role === 'streamer' && (
+      {(role === 'streamer' || role === 'moderator') && (
         <div className="flex items-center justify-center space-x-4 pt-4 border-t border-gray-800">
           <button
             onClick={toggleMute}
@@ -426,7 +427,7 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
       )}
 
       {/* Audio Level Indicator for Streamer */}
-      {role === 'streamer' && !isMuted && (
+      {(role === 'streamer' || role === 'moderator') && !isMuted && (
         <div className="mt-4 px-4">
           <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
             <div

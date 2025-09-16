@@ -99,6 +99,12 @@ export default function PumpRoulettePage() {
 
   // Check for active audio room when stream pair changes
   useEffect(() => {
+    // Completely skip for streamers with tokens
+    if (tokenParam && userRole === 'streamer') {
+      console.log('Streamer with token - skipping audio check entirely')
+      return
+    }
+
     const checkForActiveAudio = async () => {
       if (currentStreamPair?.room_id && !audioEnabled) {
         try {
@@ -111,15 +117,18 @@ export default function PumpRoulettePage() {
             } else {
               setHasActiveAudio(false)
             }
+          } else {
+            setHasActiveAudio(false)
           }
         } catch (error) {
           console.error('Failed to check for active audio:', error)
+          setHasActiveAudio(false)
         }
       }
     }
 
     checkForActiveAudio()
-  }, [currentStreamPair, audioEnabled])
+  }, [currentStreamPair, audioEnabled, userRole, tokenParam])
 
   // Handle audio summon notifications
   useEffect(() => {
@@ -159,8 +168,11 @@ export default function PumpRoulettePage() {
   }, [audioJoinRequest, user, currentStreamPair, toast])
 
   useEffect(() => {
+    // Only run once on mount
+    let mounted = true
+
     // If room parameter exists, join that room
-    if (roomParam) {
+    if (roomParam && mounted) {
       console.log('Room parameter detected:', roomParam)
 
       // If token is also provided, set up audio room directly
@@ -205,6 +217,10 @@ export default function PumpRoulettePage() {
               })
 
             console.log('Streamer setup complete - AudioRoom should be visible')
+            console.log('audioEnabled:', true)
+            console.log('audioRoomToken:', tokenParam)
+            console.log('audioRoomId:', `audio_${roomParam}`)
+            console.log('userRole:', 'streamer')
           }
         } catch (error) {
           console.error('Failed to parse token:', error)
@@ -213,13 +229,17 @@ export default function PumpRoulettePage() {
         handleJoinRoom(roomParam)
       }
       // DON'T fetch new pair when joining a room!
-    } else if (!customRoomId) {
+    } else if (!customRoomId && mounted) {
       // Only fetch new pair if not in a custom room
       fetchNewPair()
     }
-    // No auto guest login - user must connect wallet
+
     // Force dark mode
     document.documentElement.classList.add('dark')
+
+    return () => {
+      mounted = false
+    }
   }, [roomParam, tokenParam])
 
   // When streamPair changes (from fetchNewPair), create/update the room with full data
@@ -942,9 +962,12 @@ export default function PumpRoulettePage() {
               {/* Audio Status Indicator */}
               {/* Only show status indicator for moderators/viewers, not for streamers joining via URL */}
               {hasActiveAudio && userRole !== 'streamer' && (
-                <div className="px-2 py-1 rounded-sm text-xs font-medium bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center gap-2">
-                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
-                  <span>
+                <div className="px-2 py-1 rounded-sm text-xs font-medium flex items-center gap-2" style={{
+                  backgroundColor: 'rgba(131, 239, 170, 0.1)',
+                  border: '1px solid rgba(131, 239, 170, 0.3)'
+                }}>
+                  <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: '#83EFAA' }} />
+                  <span style={{ color: '#83EFAA' }}>
                     {audioParticipants.length > 0 ? (
                       <>
                         {audioParticipants.map(p => p.name).join(', ')} in audio
@@ -1118,7 +1141,21 @@ export default function PumpRoulettePage() {
           </div>
 
           {/* Audio Room */}
-          {(audioEnabled || viewerAudioEnabled) && audioRoomToken && audioRoomId && (
+          {(() => {
+            const isStreamerWithToken = tokenParam && userRole === 'streamer'
+            console.log('AudioRoom render check:', {
+              audioEnabled,
+              viewerAudioEnabled,
+              audioRoomToken: audioRoomToken ? 'exists' : 'null',
+              audioRoomId,
+              userRole,
+              tokenParam: tokenParam ? 'exists' : 'null',
+              isStreamerWithToken,
+              shouldRender: (audioEnabled || viewerAudioEnabled || isStreamerWithToken) && audioRoomToken && audioRoomId
+            })
+            return null
+          })()}
+          {((audioEnabled || viewerAudioEnabled) || (tokenParam && userRole === 'streamer')) && audioRoomToken && audioRoomId && (
             <div className="border-b border-[#25262b]">
               <AudioRoom
                 roomId={audioRoomId}

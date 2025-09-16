@@ -266,6 +266,8 @@ async def get_audio_stream(
         # Get active audio room for stream pair
         room_id = await audio_service.get_room_by_stream_pair(pair_id)
         if not room_id:
+            # Return 404 but don't break for streamers with tokens
+            # They don't need this endpoint anyway
             raise HTTPException(status_code=404, detail="No active audio room for this stream pair")
 
         # Get room details
