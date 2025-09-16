@@ -15,6 +15,8 @@ interface StreamData {
   token_address: string
   streamer_name: string
   viewer_count: number
+  access_token?: string
+  room_id?: string
   market_cap?: number
   usd_market_cap?: number
   price_change_24h?: number
@@ -40,6 +42,8 @@ interface LiveKitStreamProps {
   onMuteChange?: (muted: boolean) => void
 }
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+
 export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKitStreamProps) {
   const videoContainerRef = useRef<HTMLDivElement>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -52,37 +56,39 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
   const [showShare, setShowShare] = useState(false)
 
   useEffect(() => {
-    // Instead of using shared access_token, fetch individual token for this user
+    // Fetch individual token for this viewer
     const fetchTokenAndConnect = async () => {
       try {
         setIsLoading(true)
         setError(null)
 
-        // Get a new access token for this specific user
-        const tokenResponse = await fetch(
-          `http://localhost:8000/api/v1/streams/access-token/${stream.token_address}`
-        )
+        // Fetch a unique access token for this viewer
+        const response = await fetch(`${API_BASE_URL}/streams/access-token/${stream.token_address}`)
 
-        if (!tokenResponse.ok) {
-          throw new Error('Failed to get stream access token')
+        if (!response.ok) {
+          if (response.status === 404) {
+            throw new Error('Stream not available or not live')
+          }
+          throw new Error(`Failed to get access token: ${response.statusText}`)
         }
 
-        const tokenData = await tokenResponse.json()
+        const data = await response.json()
 
-        if (tokenData.success && tokenData.access_token) {
-          // Connect with the individual token
-          await connectToRoom(tokenData.access_token)
-        } else {
-          throw new Error('No access token received')
+        if (!data.access_token) {
+          throw new Error('No access token received from server')
         }
+
+        // Connect to room with the individual token
+        await connectToRoom(data.access_token)
+
       } catch (error) {
         console.error('Failed to get access token:', error)
-        setError('Unable to connect to stream')
+        setError(error instanceof Error ? error.message : 'Unable to connect to stream')
         setIsLoading(false)
       }
     }
 
-    // Always fetch a new token for this user if we have a token_address
+    // Fetch a new token for this viewer if we have a token_address
     if (stream.token_address) {
       fetchTokenAndConnect()
     } else {
@@ -260,31 +266,30 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
           <div className="text-center">
             <p className="text-red-400 mb-4">{error}</p>
             <button
-              onClick={() => {
+              onClick={async () => {
                 // Retry by fetching a new token
-                const fetchTokenAndConnect = async () => {
-                  try {
-                    setIsLoading(true)
-                    setError(null)
-                    const tokenResponse = await fetch(
-                      `http://localhost:8000/api/v1/streams/access-token/${stream.token_address}`
-                    )
-                    if (!tokenResponse.ok) {
-                      throw new Error('Failed to get stream access token')
-                    }
-                    const tokenData = await tokenResponse.json()
-                    if (tokenData.success && tokenData.access_token) {
-                      await connectToRoom(tokenData.access_token)
-                    } else {
-                      throw new Error('No access token received')
-                    }
-                  } catch (error) {
-                    console.error('Failed to get access token:', error)
-                    setError('Unable to connect to stream')
-                    setIsLoading(false)
+                try {
+                  setIsLoading(true)
+                  setError(null)
+
+                  const response = await fetch(`${API_BASE_URL}/streams/access-token/${stream.token_address}`)
+
+                  if (!response.ok) {
+                    throw new Error('Failed to get access token')
                   }
+
+                  const data = await response.json()
+
+                  if (data.access_token) {
+                    await connectToRoom(data.access_token)
+                  } else {
+                    throw new Error('No access token available')
+                  }
+                } catch (err) {
+                  console.error('Retry failed:', err)
+                  setError('Unable to connect to stream')
+                  setIsLoading(false)
                 }
-                fetchTokenAndConnect()
               }}
               className="px-4 py-2 bg-[#7DE2A1] hover:bg-[#6dd291] text-black font-semibold rounded-lg"
             >

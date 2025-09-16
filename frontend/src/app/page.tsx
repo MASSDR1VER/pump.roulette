@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { LiveKitStream } from '@/components/LiveKitStream'
 import AudioRoom from '@/components/AudioRoom'
 import { ProgressBar } from '@/components/ProgressBar'
+import { TalkView } from '@/components/TalkView'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Shuffle,
@@ -56,8 +57,10 @@ export default function PumpRoulettePage() {
   // Check for room and token parameters in URL
   const roomParam = searchParams.get('room')
   const tokenParam = searchParams.get('token')
+  const roleParam = searchParams.get('role')
 
   // State declarations
+  const [showTalkView, setShowTalkView] = useState(false)
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [micEnabled, setMicEnabled] = useState(false)
   const [audioRoomToken, setAudioRoomToken] = useState<string | null>(null)
@@ -99,9 +102,8 @@ export default function PumpRoulettePage() {
 
   // Check for active audio room when stream pair changes
   useEffect(() => {
-    // Completely skip for streamers with tokens
-    if (tokenParam && userRole === 'streamer') {
-      console.log('Streamer with token - skipping audio check entirely')
+    // Skip if TalkView is showing
+    if (showTalkView) {
       return
     }
 
@@ -128,7 +130,7 @@ export default function PumpRoulettePage() {
     }
 
     checkForActiveAudio()
-  }, [currentStreamPair, audioEnabled, userRole, tokenParam])
+  }, [currentStreamPair, audioEnabled, showTalkView])
 
   // Handle audio summon notifications
   useEffect(() => {
@@ -175,56 +177,19 @@ export default function PumpRoulettePage() {
     if (roomParam && mounted) {
       console.log('Room parameter detected:', roomParam)
 
-      // If token is also provided, set up audio room directly
-      if (tokenParam) {
-        console.log('Token parameter detected, setting up audio room as STREAMER')
+      // If token is also provided, show wallet verification flow
+      if (tokenParam && roleParam) {
+        console.log('Token and role parameters detected, showing wallet verification')
+        setShowTalkView(true)
         setCustomRoomId(roomParam)
 
-        // Parse the token to check if it's a streamer token
-        try {
-          const tokenParts = tokenParam.split('.')
-          if (tokenParts.length === 3) {
-            const payload = JSON.parse(atob(tokenParts[1]))
-            console.log('Token payload:', payload)
-
-            // Set up audio for streamer immediately
-            setAudioRoomToken(tokenParam)
-            setAudioRoomId(`audio_${roomParam}`)
-            setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
-            setUserRole('streamer')
-            setAudioEnabled(true) // This enables the AudioRoom component
-            setHasActiveAudio(false) // Don't show viewer controls
-            setViewerAudioEnabled(false) // Not a viewer
-            setStreamerJoinPending(false) // Not waiting to join
-            setCustomRoomId(roomParam) // Set the room ID
-
-            // Load room data without overriding audio settings
-            fetchRoomInfo(roomParam).then(roomData => {
-              if (roomData && roomData.stream_pair) {
-                setCustomStreamPair(roomData.stream_pair)
-                console.log('Room data loaded for streamer:', roomData.stream_pair)
-              }
-            })
-
-            // Request microphone permission immediately
-            navigator.mediaDevices.getUserMedia({ audio: true })
-              .then(stream => {
-                console.log('Microphone permission granted')
-                stream.getTracks().forEach(track => track.stop())
-              })
-              .catch(err => {
-                console.error('Microphone permission denied:', err)
-              })
-
-            console.log('Streamer setup complete - AudioRoom should be visible')
-            console.log('audioEnabled:', true)
-            console.log('audioRoomToken:', tokenParam)
-            console.log('audioRoomId:', `audio_${roomParam}`)
-            console.log('userRole:', 'streamer')
+        // Load room data for streamer
+        fetchRoomInfo(roomParam).then(roomData => {
+          if (roomData && roomData.stream_pair) {
+            setCustomStreamPair(roomData.stream_pair)
+            console.log('Room data loaded for streamer:', roomData.stream_pair)
           }
-        } catch (error) {
-          console.error('Failed to parse token:', error)
-        }
+        })
       } else {
         handleJoinRoom(roomParam)
       }
@@ -796,7 +761,7 @@ export default function PumpRoulettePage() {
                       alt={user.display_name}
                       className="w-4 h-4 rounded-full"
                     />
-                    <span className="hidden lg:inline text-xs">{(user.display_name || user.username).slice(0, 8)}</span>
+                    <span className="hidden lg:inline text-xs">{(user.display_name || user.username || '').slice(0, 8)}</span>
                     {user.is_verified && (
                       <span className="hidden sm:block w-1.5 h-1.5 bg-white rounded-full"></span>
                     )}
@@ -931,8 +896,8 @@ export default function PumpRoulettePage() {
                 </button>
               )}
 
-              {/* Regular Summon/End Call button - hide for streamers joining via URL */}
-              {!streamerJoinPending && !hasActiveAudio && userRole !== 'streamer' && (
+              {/* Regular Summon/End Call button - hide for streamers joining via URL and when TalkView is showing */}
+              {!streamerJoinPending && !hasActiveAudio && userRole !== 'streamer' && !showTalkView && (
                 <button
                   onClick={() => audioEnabled ? setAudioEnabled(false) : handleSummonStreamers()}
                   disabled={!isWalletConnected && !audioEnabled}
@@ -1105,23 +1070,65 @@ export default function PumpRoulettePage() {
             ) : currentStreamPair ? (
               <div className="flex-1 flex flex-col">
                 {/* Stream 1 */}
-                <div className="flex-1 flex border-b border-[#25262b]">
+                <div className="flex-1 flex border-b border-[#25262b] relative">
                   <LiveKitStream
                     stream={currentStreamPair.stream_1}
                     streamId="stream1"
                     muted={streamMuted.stream1}
                     onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream1: muted }))}
                   />
+                  {/* Show TalkView overlay for streamer_a */}
+                  {showTalkView && roleParam === 'streamer_a' && roomParam && tokenParam && (
+                    <div className="absolute inset-0 z-10">
+                      <TalkView
+                        roomId={roomParam}
+                        token={tokenParam}
+                        role={roleParam}
+                        onClose={() => {
+                          setShowTalkView(false)
+                          // After verification, set up audio
+                          if (tokenParam && roleParam) {
+                            setAudioRoomToken(tokenParam)
+                            setAudioRoomId(`audio_${roomParam}`)
+                            setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
+                            setUserRole('streamer')
+                            setAudioEnabled(true)
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Stream 2 */}
-                <div className="flex-1 flex">
+                <div className="flex-1 flex relative">
                   <LiveKitStream
                     stream={currentStreamPair.stream_2}
                     streamId="stream2"
                     muted={streamMuted.stream2}
                     onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream2: muted }))}
                   />
+                  {/* Show TalkView overlay for streamer_b */}
+                  {showTalkView && roleParam === 'streamer_b' && roomParam && tokenParam && (
+                    <div className="absolute inset-0 z-10">
+                      <TalkView
+                        roomId={roomParam}
+                        token={tokenParam}
+                        role={roleParam}
+                        onClose={() => {
+                          setShowTalkView(false)
+                          // After verification, set up audio
+                          if (tokenParam && roleParam) {
+                            setAudioRoomToken(tokenParam)
+                            setAudioRoomId(`audio_${roomParam}`)
+                            setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
+                            setUserRole('streamer')
+                            setAudioEnabled(true)
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             ) : null}
@@ -1141,21 +1148,7 @@ export default function PumpRoulettePage() {
           </div>
 
           {/* Audio Room */}
-          {(() => {
-            const isStreamerWithToken = tokenParam && userRole === 'streamer'
-            console.log('AudioRoom render check:', {
-              audioEnabled,
-              viewerAudioEnabled,
-              audioRoomToken: audioRoomToken ? 'exists' : 'null',
-              audioRoomId,
-              userRole,
-              tokenParam: tokenParam ? 'exists' : 'null',
-              isStreamerWithToken,
-              shouldRender: (audioEnabled || viewerAudioEnabled || isStreamerWithToken) && audioRoomToken && audioRoomId
-            })
-            return null
-          })()}
-          {((audioEnabled || viewerAudioEnabled) || (tokenParam && userRole === 'streamer')) && audioRoomToken && audioRoomId && (
+          {(audioEnabled || viewerAudioEnabled) && audioRoomToken && audioRoomId && (
             <div className="border-b border-[#25262b]">
               <AudioRoom
                 roomId={audioRoomId}

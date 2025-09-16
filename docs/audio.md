@@ -1,112 +1,111 @@
-Got it — here’s an improved PRD focused specifically on the joint audio system, with clear framing around how two creators communicate live while the audience listens along.
+Here’s a clean, drop-in Claude Code prompt to implement wallet-gated audio for both creators.
 
 ⸻
 
-Product Requirements Document (PRD)
+SYSTEM / DEV PROMPT FOR CLAUDE-CODE
 
-Feature: Joint Audio Conversation Between Live Streams
-Product Name: PumpRoulette (Audio Layer)
-Version: v1.1
-Date: [Insert Date]
+Goal: update the /talk UI so that Streamer A and Streamer B must connect a Solana wallet and be verified as the token/stream owner before the Enable Audio button appears and the LiveKit join runs.
 
-⸻
+Inputs you already have (from POST /rooms/summon)
 
-1. Overview
+{
+  "room_id": "9MDAeoag_6JsLKqTr",
+  "audio_endpoint": "wss://pump-udxzob1q.livekit.cloud",
+  "streamer_a_url": "http://localhost:3001/?room=...&token=...A",
+  "streamer_b_url": "http://localhost:3001/?room=...&token=...B",
+  "room_token": "server_jwt_for_viewers_or_service"
+}
 
-PumpRoulette introduces a joint audio layer that allows two Pump.fun creators to talk to each other in real time while their audiences listen in. Viewers see both creators’ live Pump.fun streams side by side, and hear their private dialogue broadcast as a shared audio channel.
+New backend assumptions (add if missing)
+ 1. GET /api/rooms/:roomId/allowed-wallets → returns:
 
-This feature is the core differentiator of PumpRoulette: it transforms passive streams into interactive, conversational pairings.
+{
+  "roomId": "9MDAeoag_6JsLKqTr",
+  "creators": [
+    { "role": "A", "pubkey": "CREATOR_A_PUBKEY", "tokenMint": "MINT_A" },
+    { "role": "B", "pubkey": "CREATOR_B_PUBKEY", "tokenMint": "MINT_B" }
+  ]
+}
 
-⸻
+ 2. POST /api/rooms/:roomId/verify (body: { pubkey, role, signature, nonce }) → { ok: true }
+ • Server issues a short-lived nonce via GET /api/auth/nonce and expects a signed message (signMessage) from the connected wallet.
+ • Server also validates that pubkey matches the expected owner for the role (A or B). Optionally also check they are the token deployer/authorized address for that mint.
 
-2. Objectives
- • Enable real-time two-way audio between paired creators.
- • Broadcast that conversation to all viewers of the pair.
- • Keep joining frictionless for creators (one click to allow mic).
- • Deliver a natural, podcast-like feel for audiences.
+If you prefer, embed allowed_wallets in the join JWT under metadata and skip the fetch.
 
-⸻
+UX changes
 
-3. Core Features
+States for each creator page (/talk?room=<id>&token=<jwt>):
+ 1. Parse: read room, token from URL. Decode token metadata.display_name (e.g., “Streamer A” / “Streamer B”) or add role=A|B claim; store role.
+ 2. Wallet Gate:
+ • Show “Connect Wallet to Verify Ownership” button.
+ • Support Phantom first (window.solana). If unavailable, show “Install Phantom” link. Keep code modular to add Backpack/Solflare.
+ 3. Verify:
+ • After connect, fetch nonce, signMessage(nonce), POST /verify.
+ • If ok:true, show “Enable Audio” button; else show error and keep “Connect” visible.
+ 4. Enable Audio:
+ • Only after verified, run getUserMedia and LiveKit connect using existing logic.
+ 5. Status banner with 4 chips: Wallet: Connected, Verified, Audio: Off/On, Role: A|B.
 
-3.1 Creator Join
- • Each creator receives a secure join link when paired.
- • Clicking link → “Join & Allow Mic” → browser requests mic → creator joins.
- • Once both are connected, conversation goes live for audiences.
+Files to modify (or create if missing)
+ • web/talk.html (or React page if you used Next)
+ • web/js/wallet.js (new small helper)
+ • server/routes/rooms.ts for the two endpoints if you don’t have them
 
-3.2 Audio Routing
- • Bi-directional low-latency audio (creators hear each other).
- • Mixed feed sent to all viewers of that pair.
- • Mix-minus applied (each creator doesn’t hear their own mic).
- • Codec: Opus, 48 kHz, optimized for voice (<200ms latency).
+Implementation details (TypeScript/JS vanilla; adapt to your stack)
 
-3.3 Viewer Experience
- • When a pair is active:
- • Two Pump.fun streams side by side.
- • Conversation audio auto-plays (default replaces stream audio).
- • Option to toggle between conversation audio and raw stream audio.
- • Merged chat appears below streams for audience interaction.
+Add wallet helper
 
-3.4 Reliability & Safety
- • Auto-reconnect if a creator drops.
- • If one creator is late, viewers hear the active creator and see “Waiting for partner.”
- • Headphones encouraged; system blocks obvious echo loops (mic+speaker same device).
- • Tokens are time-boxed (JWT) → no unauthorized joins.
+// wallet.js
+export async function connectPhantom() {
+  const provider = window?.solana;
+  if (!provider || !provider.isPhantom) throw new Error('Phantom not found');
+  const { publicKey } = await provider.connect({ onlyIfTrusted: false });
+  return { provider, pubkey: publicKey.toString() };
+}
 
-⸻
+export async function sign(provider, message) {
+  const encoded = new TextEncoder().encode(message);
+  const { signature } = await provider.signMessage(encoded, 'utf8');
+  return Array.from(signature); // or Buffer.from(signature).toString('base64')
+}
 
-4. Non-Functional Requirements
- • Latency: <200ms for conversation to feel natural.
- • Scalability: 1000+ concurrent viewers per pair.
- • Cross-platform: Chrome/Edge/Firefox desktop; Safari iOS.
- • Security:
- • All joins via signed, short-lived links.
- • Media fully encrypted via WebRTC (DTLS-SRTP).
+Talk page changes (high-level)
 
-⸻
+// parse role from JWT metadata or query (?role=A/B)
+const role = getRoleFromJwt(token) || (new URLSearchParams(location.search)).get('role') || 'A';
 
-5. User Flows
+// UI elements
+const connectBtn = byId('connectWallet');
+const verifyBtn  = byId('verifyOwner'); // optional if auto on connect
+const enableBtn  = byId('enableAudio');
+const statusEl   = byId('status');
 
-Creator Flow
- 1. Creator hits Roulette on their token profile.
- 2. PumpRoulette pairs them with another creator.
- 3. If other creator is active → both receive join links.
- 4. Click link → approve mic → instantly connected.
- 5. Their voices are live to each other and to all viewers.
+// flow
+let wallet = null;
+let verified = false;
 
-Viewer Flow
- 1. Viewer lands on a paired page.
- 2. Sees both streams side by side.
- 3. Hears joint audio conversation by default.
- 4. Can switch to raw stream audio if desired.
- 5. Joins merged chat to interact.
+connectBtn.onclick = async () => {
+  try {
+    wallet = await connectPhantom(); // { provider, pubkey }
+    status('Wallet connected: ' + wallet.pubkey);
+    const { nonce } = await fetch(`/api/auth/nonce`).then(r => r.json());
+    const sig = await sign(wallet.provider, `PumpRoulette verify\nRoom:${roomName}\nRole:${role}\nNonce:${nonce}`);
+    const res = await fetch(`/api/rooms/${roomName}/verify`, {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ pubkey: wallet.pubkey, role, signature: sig, nonce })
+    }).then(r=>r.json());
+    if (!res.ok) throw new Error(res.error || 'Verification failed');
+    verified = true;
+    status('Verified. You can enable audio.');
+    enableBtn.disabled = false;
+  } catch (e) {
+    status('Wallet/verify error: ' + e.message);
+  }
+};
 
-⸻
-
-6. Technical Approach
- • SFU (Selective Forwarding Unit): LiveKit/mediasoup manages audio room.
- • Room per pair: pair_{id} created on matchmaking.
- • Roles:
- • creator → publish mic, subscribe to partner.
- • audience → subscribe only.
- • Audio tracks: each creator publishes; audience plays both.
- • Scaling: LiveKit handles replication for 1000s of listeners.
-
-⸻
-
-7. Future Enhancements
- • Server-side single mixed audio feed (instead of two separate tracks).
- • Push-to-talk mode for creators.
- • Subtitles/translations for live conversation.
- • Ability to clip/replay highlights of best dialogues.
-
-⸻
-
-8. Open Questions
- • Should the conversation audio also be fed back into each creator’s Pump.fun broadcast, or remain exclusive to PumpRoulette viewers?
- • Do viewers need per-creator volume sliders, or is a single mix enough?
- • Should conversations be ephemeral only, or optionally recorded for highlight reels?
-
-⸻
-
-👉 This reframes the PRD so it’s 100% centered on the conversation-as-content — creators talking, audience listening.
+enableBtn.onclick = async () => {
+  if (!verified) return status('Please verify ownership first.');
+  await joinLiveKitWithMic(); // your existing join logic (getUserMedia + connect)
+  status('Audio live');
+};

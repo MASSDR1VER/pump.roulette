@@ -13,11 +13,16 @@ import logging
 from services.wallet_auth_service import WalletAuthService
 from services.audio_room_service import AudioRoomService
 from services.pumpfun_notification_service import PumpFunNotificationService
-from api.v1.endpoints.auth import get_current_user, get_wallet_auth_service
+from api.v1.endpoints.auth import get_current_user, get_wallet_auth_service, verify_and_consume_nonce
+from services.stream_manager_v2 import StreamManager
+from models.token import Token
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# In-memory verified sessions storage (in production, use Redis)
+verified_sessions: Dict[str, Dict[str, Any]] = {}
 
 
 class SummonStreamersRequest(BaseModel):
@@ -64,6 +69,33 @@ class LeaveAudioRoomResponse(BaseModel):
     message: str
 
 
+class RoomVerifyRequest(BaseModel):
+    """Request model for room wallet verification."""
+    pubkey: str = Field(..., description="Wallet public key")
+    role: str = Field(..., description="Role (streamer_a or streamer_b)")
+    signature: str = Field(..., description="Signed message")
+    nonce: str = Field(..., description="Nonce used in message")
+
+
+class RoomVerifyResponse(BaseModel):
+    """Response model for room verification."""
+    ok: bool
+    verified: bool
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+class CreatorPublishTokenRequest(BaseModel):
+    """Request model for creator publish token."""
+    role: str = Field(..., description="Role (streamer_a or streamer_b)")
+
+
+class CreatorPublishTokenResponse(BaseModel):
+    """Response model for creator publish token."""
+    publish_token: str
+    expires_in: int
+
+
 def get_audio_room_service() -> AudioRoomService:
     """Dependency to get audio room service."""
     return AudioRoomService()
@@ -85,6 +117,19 @@ def get_audio_service(request: Request):
 def get_notification_service() -> PumpFunNotificationService:
     """Dependency to get notification service."""
     return PumpFunNotificationService()
+
+
+def get_stream_manager(request: Request) -> StreamManager:
+    """
+    Dependency to get the StreamManager instance.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        StreamManager instance
+    """
+    return request.app.state.stream_manager
 
 
 @router.post("/summon", response_model=SummonStreamersResponse)
@@ -154,9 +199,9 @@ async def summon_streamers(
             )
 
         # Generate frontend URLs for streamers (use correct port)
-        base_url = "http://localhost:3001"  # Frontend port
-        streamer_a_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_a']['token']}"
-        streamer_b_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_b']['token']}"
+        base_url = "http://localhost:3000"  # Frontend port
+        streamer_a_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_a']['token']}&role=streamer_a"
+        streamer_b_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_b']['token']}&role=streamer_b"
 
         # Log the URLs for testing
         logger.info("=" * 80)
@@ -418,3 +463,272 @@ def get_audio_service(request: Request):
         AudioRoomService instance
     """
     return request.app.state.audio_room_service
+
+
+@router.get("/rooms/{room_id}/allowed-wallets")
+async def get_allowed_wallets(
+    room_id: str,
+    audio_service: AudioRoomService = Depends(get_audio_room_service),
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> Dict[str, Any]:
+    """
+    Get the allowed wallet addresses for a room.
+
+    Args:
+        room_id (str): Audio room identifier
+        audio_service (AudioRoomService): Audio room service
+        stream_manager (StreamManager): Stream manager service
+
+    Returns:
+        Dict[str, Any]: Allowed wallets and their roles
+    """
+    try:
+        # Get room info
+        room_info = await audio_service.get_room_info(room_id)
+        if not room_info:
+            raise HTTPException(status_code=404, detail="Room not found")
+
+        # Get stream pair data to find token creators
+        # Room ID should match the pair_id from summon
+        creators = []
+
+        # Get streamer IDs from room info
+        if "streamer_a_id" in room_info:
+            creators.append({
+                "role": "streamer_a",
+                "pubkey": room_info["streamer_a_id"],
+                "tokenMint": room_info.get("stream_1_mint", "")
+            })
+
+        if "streamer_b_id" in room_info:
+            creators.append({
+                "role": "streamer_b",
+                "pubkey": room_info["streamer_b_id"],
+                "tokenMint": room_info.get("stream_2_mint", "")
+            })
+
+        return {
+            "roomId": room_id,
+            "creators": creators
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get allowed wallets: {str(e)}")
+
+
+@router.post("/rooms/{room_id}/verify", response_model=RoomVerifyResponse)
+async def verify_room_wallet(
+    room_id: str,
+    request: RoomVerifyRequest,
+    auth_service: WalletAuthService = Depends(get_wallet_auth_service),
+    audio_service: AudioRoomService = Depends(get_audio_room_service)
+) -> RoomVerifyResponse:
+    """
+    Verify wallet ownership for room participation.
+
+    Args:
+        room_id (str): Audio room identifier
+        request (RoomVerifyRequest): Verification request
+        auth_service (WalletAuthService): Authentication service
+        audio_service (AudioRoomService): Audio room service
+
+    Returns:
+        RoomVerifyResponse: Verification result
+    """
+    try:
+        # Verify nonce
+        if not verify_and_consume_nonce(request.nonce):
+            return RoomVerifyResponse(
+                ok=False,
+                verified=False,
+                error="Invalid or expired nonce"
+            )
+
+        # Get room info
+        room_info = await audio_service.get_room_info(room_id)
+        if not room_info:
+            return RoomVerifyResponse(
+                ok=False,
+                verified=False,
+                error="Room not found"
+            )
+
+        # Build expected message
+        expected_message = (
+            f"PumpRoulette Audio Verification\n"
+            f"Room: {room_id}\n"
+            f"Role: {request.role}\n"
+            f"Nonce: {request.nonce}"
+        )
+
+        # Verify signature
+        is_valid = auth_service.verify_wallet_signature(
+            request.pubkey,
+            expected_message,
+            request.signature
+        )
+
+        if not is_valid:
+            return RoomVerifyResponse(
+                ok=False,
+                verified=False,
+                error="Invalid signature"
+            )
+
+        # Check if wallet is allowed for this role
+        expected_wallet = None
+        if request.role == "streamer_a":
+            expected_wallet = room_info.get("streamer_a_id")
+        elif request.role == "streamer_b":
+            expected_wallet = room_info.get("streamer_b_id")
+
+        if not expected_wallet or expected_wallet != request.pubkey:
+            return RoomVerifyResponse(
+                ok=False,
+                verified=False,
+                error=f"Wallet not authorized for role {request.role}"
+            )
+
+        # Store verified session
+        session_key = f"{room_id}:{request.role}:{request.pubkey}"
+        verified_sessions[session_key] = {
+            "verified_at": datetime.now().timestamp(),
+            "expires_at": datetime.now().timestamp() + 300,  # 5 minutes
+            "room_id": room_id,
+            "role": request.role,
+            "pubkey": request.pubkey
+        }
+
+        logger.info(f"Wallet verified: {request.pubkey} for role {request.role} in room {room_id}")
+
+        return RoomVerifyResponse(
+            ok=True,
+            verified=True,
+            message="Wallet verified successfully"
+        )
+
+    except Exception as e:
+        logger.error(f"Verification error: {e}")
+        return RoomVerifyResponse(
+            ok=False,
+            verified=False,
+            error=str(e)
+        )
+
+
+@router.post("/rooms/{room_id}/creator-publish-token", response_model=CreatorPublishTokenResponse)
+async def get_creator_publish_token(
+    room_id: str,
+    request: CreatorPublishTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    audio_service: AudioRoomService = Depends(get_audio_room_service)
+) -> CreatorPublishTokenResponse:
+    """
+    Get a LiveKit publish token for verified creators.
+
+    Args:
+        room_id (str): Audio room identifier
+        request (CreatorPublishTokenRequest): Token request
+        current_user (Dict[str, Any]): Current authenticated user
+        audio_service (AudioRoomService): Audio room service
+
+    Returns:
+        CreatorPublishTokenResponse: LiveKit publish token
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        # Check if user is verified for this room and role
+        session_key = f"{room_id}:{request.role}:{current_user['wallet_address']}"
+
+        if session_key not in verified_sessions:
+            raise HTTPException(status_code=403, detail="Not verified for this room")
+
+        session = verified_sessions[session_key]
+
+        # Check if session expired
+        if session["expires_at"] < datetime.now().timestamp():
+            del verified_sessions[session_key]
+            raise HTTPException(status_code=403, detail="Verification expired")
+
+        # Generate LiveKit publish token
+        publish_token = audio_service._generate_streamer_token(
+            room_id,
+            current_user["wallet_address"],
+            f"Streamer {request.role[-1].upper()}"  # "Streamer A" or "Streamer B"
+        )
+
+        return CreatorPublishTokenResponse(
+            publish_token=publish_token,
+            expires_in=600  # 10 minutes
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate publish token: {str(e)}")
+
+
+@router.get("/rooms/{room_id}/stream-data")
+async def get_room_stream_data(
+    room_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    audio_service: AudioRoomService = Depends(get_audio_room_service),
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> Dict[str, Any]:
+    """
+    Get stream data for the talk page.
+
+    Args:
+        room_id (str): Audio room identifier
+        current_user (Dict[str, Any]): Current authenticated user
+        audio_service (AudioRoomService): Audio room service
+        stream_manager (StreamManager): Stream manager service
+
+    Returns:
+        Dict[str, Any]: Stream data for display
+    """
+    try:
+        # Get room info
+        room_info = await audio_service.get_room_info(room_id)
+        if not room_info:
+            raise HTTPException(status_code=404, detail="Room not found")
+
+        # Determine user role
+        user_role = None
+        if current_user:
+            if current_user["wallet_address"] == room_info.get("streamer_a_id"):
+                user_role = "streamer_a"
+            elif current_user["wallet_address"] == room_info.get("streamer_b_id"):
+                user_role = "streamer_b"
+
+        # Get stream pair data
+        # For now, return mock data - in production, fetch from stream_manager
+        stream_data = {
+            "room_id": room_id,
+            "stream_1": {
+                "stream_id": room_info.get("stream_1_mint", ""),
+                "token_name": "Token A",
+                "token_address": room_info.get("stream_1_mint", ""),
+                "streamer_id": room_info.get("streamer_a_id", ""),
+                "is_live": True
+            },
+            "stream_2": {
+                "stream_id": room_info.get("stream_2_mint", ""),
+                "token_name": "Token B",
+                "token_address": room_info.get("stream_2_mint", ""),
+                "streamer_id": room_info.get("streamer_b_id", ""),
+                "is_live": True
+            },
+            "user_role": user_role
+        }
+
+        return stream_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get stream data: {str(e)}")

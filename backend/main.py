@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
+import asyncio
 import logging
 from typing import AsyncGenerator
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -62,12 +63,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # Start background tasks
     await app.state.stream_manager.initialize()
 
+    # Start cleanup task
+    async def cleanup_task():
+        """Periodic cleanup task to remove old tokens and mark inactive streams."""
+        while True:
+            try:
+                await asyncio.sleep(300)  # Wait 5 minutes
+
+                # Cleanup inactive streams
+                inactive_count = await app.state.stream_manager.pump_client.cleanup_inactive_streams()
+                if inactive_count > 0:
+                    logger.info(f"Marked {inactive_count} streams as inactive")
+
+                # Cleanup old tokens (older than 24 hours)
+                deleted_count = await app.state.stream_manager.pump_client.cleanup_old_tokens(hours=24)
+                if deleted_count > 0:
+                    logger.info(f"Deleted {deleted_count} old tokens")
+
+            except Exception as e:
+                logger.error(f"Error in cleanup task: {e}")
+
+    app.state.cleanup_task = asyncio.create_task(cleanup_task())
+    logger.info("Started periodic cleanup task")
+
     logger.info("PumpRoulette backend started successfully")
 
     yield
 
     # Shutdown
     logger.info("Shutting down PumpRoulette backend...")
+
+    # Cancel cleanup task
+    if hasattr(app.state, 'cleanup_task'):
+        app.state.cleanup_task.cancel()
     await app.state.stream_manager.cleanup()
     await app.state.websocket_manager.cleanup()
     logger.info("PumpRoulette backend shutdown complete")

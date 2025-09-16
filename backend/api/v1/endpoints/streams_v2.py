@@ -78,6 +78,71 @@ async def get_random_stream_pair(
         raise HTTPException(status_code=500, detail=f"Failed to get random pair: {str(e)}")
 
 
+@router.get("/verify/{mint}")
+async def verify_stream_is_live(
+    mint: str,
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> Dict[str, Any]:
+    """
+    Verify if a stream is actually live and accessible.
+
+    Args:
+        mint (str): The token's Solana mint address
+        stream_manager (StreamManager): The stream manager service
+
+    Returns:
+        Dict[str, Any]: Stream verification status
+
+    Raises:
+        HTTPException: If stream verification fails
+    """
+    try:
+        from models.token import Token
+        from datetime import datetime
+
+        # Find token in database
+        token = await Token.find_one(Token.mint == mint)
+
+        if not token:
+            return {
+                "mint": mint,
+                "is_live": False,
+                "reason": "Token not found in database"
+            }
+
+        # Check if marked as live
+        if not token.is_currently_live:
+            return {
+                "mint": mint,
+                "is_live": False,
+                "reason": "Stream not marked as live"
+            }
+
+        # Check recent trade activity
+        if token.last_trade_timestamp:
+            time_diff = datetime.utcnow() - token.last_trade_timestamp
+            if time_diff.total_seconds() > 120:  # More than 2 minutes old
+                # Mark as inactive
+                token.is_currently_live = False
+                await token.save()
+                return {
+                    "mint": mint,
+                    "is_live": False,
+                    "reason": f"No recent activity (last trade {int(time_diff.total_seconds())} seconds ago)"
+                }
+
+        return {
+            "mint": mint,
+            "is_live": True,
+            "stream_url": await stream_manager.pump_client.get_token_stream_url(mint),
+            "token_name": token.name,
+            "last_trade": token.last_trade_timestamp.isoformat() if token.last_trade_timestamp else None
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to verify stream: {str(e)}")
+
+
 @router.get("/token/{mint}")
 async def get_stream_by_mint(
     mint: str,

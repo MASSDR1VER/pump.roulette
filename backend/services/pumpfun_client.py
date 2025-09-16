@@ -8,7 +8,7 @@ Based on reverse-engineered API from frontend-api-v3.pump.fun.
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Callable
 import socketio
 from models.token import Token
@@ -179,6 +179,7 @@ class PumpFunClient:
             token = await Token.find_one(Token.mint == token_data["mint"])
             if not token:
                 token = Token(**token_data)
+                token.last_trade_timestamp = datetime.utcnow()  # Set last trade timestamp
                 await token.insert()
                 logger.debug(f"New token discovered: {token.symbol} ({token.mint})")
             else:
@@ -190,6 +191,7 @@ class PumpFunClient:
                 token.is_currently_live = token_data["is_currently_live"]
                 token.signature = token_data["signature"]  # Update signature
                 token.updated_at = datetime.utcnow()
+                token.last_trade_timestamp = datetime.utcnow()  # Update last trade timestamp
                 token.trade_count += 1
                 await token.save()
 
@@ -247,21 +249,44 @@ class PumpFunClient:
         Returns:
             list[Token]: List of tokens with live streams
         """
-        # Filter for tokens that are marked as having live streams
-        # In Pump.fun, is_currently_live indicates if there's an active stream
+        # Get tokens that are currently live
         tokens = await Token.find(
             Token.is_currently_live == True
-        ).sort(-Token.trade_count).limit(limit).to_list()
+        ).sort(-Token.usd_market_cap).limit(limit * 2).to_list()  # Get more initially
 
-        # Additional filtering - only return tokens with recent activity
+        # Log how many live tokens we found
+        logger.info(f"Found {len(tokens)} tokens with is_currently_live=True")
+
+        # Filter for truly active streams (those with recent activity)
+        current_time = datetime.utcnow()
         live_tokens = []
-        for token in tokens:
-            # Check if token has recent trades (within last 5 minutes)
-            if token.last_trade_timestamp:
-                time_diff = datetime.utcnow() - token.last_trade_timestamp
-                if time_diff.total_seconds() < 300:  # 5 minutes
-                    live_tokens.append(token)
 
+        for token in tokens:
+            # Check if token has recent trade activity (within last 15 minutes)
+            # This is more lenient than before but still filters out stale streams
+            if token.last_trade_timestamp:
+                time_diff = current_time - token.last_trade_timestamp
+                minutes_since_trade = time_diff.total_seconds() / 60
+
+                # Log token details for debugging
+                if minutes_since_trade < 15:
+                    logger.debug(f"✅ Including live stream: {token.name} (last trade: {minutes_since_trade:.1f} min ago)")
+                    live_tokens.append(token)
+                else:
+                    logger.debug(f"❌ Excluding stale stream: {token.name} (last trade: {minutes_since_trade:.1f} min ago)")
+            else:
+                # If no trade timestamp, check updated_at
+                if token.updated_at:
+                    time_diff = current_time - token.updated_at
+                    minutes_since_update = time_diff.total_seconds() / 60
+                    if minutes_since_update < 15:
+                        logger.debug(f"✅ Including live stream (no trade time): {token.name} (updated: {minutes_since_update:.1f} min ago)")
+                        live_tokens.append(token)
+
+            if len(live_tokens) >= limit:
+                break
+
+        logger.info(f"Filtered to {len(live_tokens)} truly live streams")
         return live_tokens
 
     async def get_token_stream_url(self, mint: str) -> str:
@@ -289,6 +314,49 @@ class PumpFunClient:
 
         # For now, use the standard coin page
         return f"https://pump.fun/coin/{mint}"
+
+    async def cleanup_old_tokens(self, hours: int = 24) -> int:
+        """
+        Remove old tokens from database that haven't been updated recently.
+
+        Args:
+            hours (int): Remove tokens older than this many hours
+
+        Returns:
+            int: Number of tokens deleted
+        """
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+
+        # Delete tokens that are not live and haven't been traded recently
+        result = await Token.find(
+            Token.is_currently_live == False,
+            Token.last_trade_timestamp < cutoff_time
+        ).delete()
+
+        if result.deleted_count > 0:
+            logger.info(f"Cleaned up {result.deleted_count} old tokens")
+
+        return result.deleted_count
+
+    async def cleanup_inactive_streams(self) -> int:
+        """
+        Mark streams as inactive if they haven't had recent activity.
+
+        Returns:
+            int: Number of streams marked as inactive
+        """
+        cutoff_time = datetime.utcnow() - timedelta(minutes=5)
+
+        # Update tokens that claim to be live but have no recent trades
+        result = await Token.find(
+            Token.is_currently_live == True,
+            Token.last_trade_timestamp < cutoff_time
+        ).update_many({"$set": {"is_currently_live": False}})
+
+        if result.modified_count > 0:
+            logger.info(f"Marked {result.modified_count} streams as inactive")
+
+        return result.modified_count
 
     async def get_random_pair(self) -> Optional[tuple[Token, Token]]:
         """

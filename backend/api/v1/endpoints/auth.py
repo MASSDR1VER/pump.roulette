@@ -7,8 +7,10 @@ API endpoints for wallet-based user authentication.
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
+import secrets
+import time
 
 from services.wallet_auth_service import WalletAuthService
 from models.user import User
@@ -16,6 +18,9 @@ from models.user import User
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# In-memory nonce storage (in production, use Redis)
+nonce_storage: Dict[str, Dict[str, Any]] = {}
 
 
 class WalletConnectRequest(BaseModel):
@@ -268,3 +273,69 @@ async def validate_wallet_token(
         "username": current_user["username"],
         "expires_at": current_user.get("exp")
     }
+
+
+@router.get("/nonce")
+async def get_nonce() -> Dict[str, str]:
+    """
+    Generate a unique nonce for wallet signature verification.
+
+    Returns:
+        Dict[str, str]: Nonce value
+    """
+    # Generate a secure random nonce
+    nonce = secrets.token_urlsafe(16)
+
+    # Store nonce with expiration (60 seconds)
+    current_time = time.time()
+    nonce_storage[nonce] = {
+        "created_at": current_time,
+        "expires_at": current_time + 60,
+        "used": False
+    }
+
+    # Clean up expired nonces
+    expired_nonces = [
+        n for n, data in nonce_storage.items()
+        if data["expires_at"] < current_time
+    ]
+    for n in expired_nonces:
+        del nonce_storage[n]
+
+    logger.info(f"Generated nonce: {nonce}")
+
+    return {"nonce": nonce}
+
+
+def verify_and_consume_nonce(nonce: str) -> bool:
+    """
+    Verify a nonce is valid and mark it as used.
+
+    Args:
+        nonce (str): Nonce to verify
+
+    Returns:
+        bool: True if nonce is valid and unused
+    """
+    if nonce not in nonce_storage:
+        logger.warning(f"Nonce not found: {nonce}")
+        return False
+
+    nonce_data = nonce_storage[nonce]
+    current_time = time.time()
+
+    # Check if expired
+    if nonce_data["expires_at"] < current_time:
+        logger.warning(f"Nonce expired: {nonce}")
+        del nonce_storage[nonce]
+        return False
+
+    # Check if already used
+    if nonce_data["used"]:
+        logger.warning(f"Nonce already used: {nonce}")
+        return False
+
+    # Mark as used
+    nonce_data["used"] = True
+    logger.info(f"Nonce consumed: {nonce}")
+    return True

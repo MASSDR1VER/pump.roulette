@@ -73,8 +73,8 @@ class StreamManager:
             List[Dict[str, Any]]: List of stream metadata
         """
         try:
-            # Get active tokens from database
-            tokens = await self.pump_client.get_active_tokens(limit=limit)
+            # Get only truly live streaming tokens with recent activity
+            tokens = await self.pump_client.get_live_streaming_tokens(limit=limit)
 
             # Convert to stream format
             streams = []
@@ -117,19 +117,24 @@ class StreamManager:
         """
         try:
             # Get ONLY tokens with live streams (is_currently_live = true)
-            live_streaming_tokens = await self.pump_client.get_live_streaming_tokens(limit=20)
+            logger.info("Fetching live streaming tokens...")
+            live_streaming_tokens = await self.pump_client.get_live_streaming_tokens(limit=50)
+
+            logger.info(f"Got {len(live_streaming_tokens)} live streaming tokens")
 
             if len(live_streaming_tokens) < 2:
                 logger.warning(f"Not enough live streaming tokens: {len(live_streaming_tokens)}")
+                # Log the tokens we did find for debugging
+                for token in live_streaming_tokens:
+                    logger.info(f"Available token: {token.name} (live: {token.is_currently_live})")
+                # Don't fallback to non-live tokens, just return None
+                return None
 
-                # Fallback to regular tokens if no live streams
-                token_pair = await self.pump_client.get_random_pair()
-            else:
-                # Select two random live streaming tokens
-                import random
-                selected = random.sample(live_streaming_tokens, 2)
-                token_pair = (selected[0], selected[1])
-                logger.info(f"Selected live streams: {selected[0].name} & {selected[1].name}")
+            # Select two random live streaming tokens
+            import random
+            selected = random.sample(live_streaming_tokens, 2)
+            token_pair = (selected[0], selected[1])
+            logger.info(f"✅ Selected live streams: {selected[0].name} & {selected[1].name}")
 
             if not token_pair:
                 logger.warning("Not enough active tokens for pairing")
