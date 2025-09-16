@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiveKit Direct Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.5.7/dist/livekit-client.umd.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #status {
+            margin: 20px 0;
+            padding: 15px;
+            background: #333;
+            border-radius: 5px;
+        }
+        .error {
+            color: #ff6b6b;
+        }
+        .success {
+            color: #51cf66;
+        }
+        #log {
+            background: #000;
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎤 LiveKit Direct Connection Test</h1>
+
+    <div id="status">
+        <p>Status: <span id="connectionStatus">Not connected</span></p>
+        <p>Room: test-pair-20250916-044507</p>
+    </div>
+
+    <div>
+        <button onclick="connectAsStreamer()">Connect as Streamer</button>
+        <button onclick="connectAsViewer()">Connect as Viewer</button>
+        <button onclick="disconnect()">Disconnect</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        let room = null;
+        const logDiv = document.getElementById('log');
+        const statusSpan = document.getElementById('connectionStatus');
+
+        // Tokens from backend
+        const STREAMER_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ2aWRlbyI6eyJyb29tSm9pbiI6dHJ1ZSwicm9vbSI6ImF1ZGlvX3Rlc3QtcGFpci0yMDI1MDkxNi0wNDQ1MDciLCJjYW5QdWJsaXNoIjp0cnVlLCJjYW5TdWJzY3JpYmUiOnRydWUsImNhblB1Ymxpc2hEYXRhIjp0cnVlLCJoaWRkZW4iOmZhbHNlfSwibWV0YWRhdGEiOiJ7XCJyb2xlXCI6XCJzdHJlYW1lclwiLFwiZGlzcGxheV9uYW1lXCI6XCJBbGljZVwifSIsIm5hbWUiOiJBbGljZSIsImlzcyI6IkFQSXBhbm13WFpCNERBbyIsInN1YiI6ImFsaWNlLXdhbGxldC1hZGRyZXNzIiwiZXhwIjoxNzU3OTkwNzA3LCJuYmYiOjAsImlhdCI6MTc1Nzk4NzEwN30.Cd3aGLCJY3QD47wr73y0sjMyClqmB4U9_EzMGamLk4M";
+
+        const VIEWER_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ2aWRlbyI6eyJyb29tSm9pbiI6dHJ1ZSwicm9vbSI6ImF1ZGlvX3Rlc3QtcGFpci0yMDI1MDkxNi0wNDQ1MDciLCJjYW5QdWJsaXNoIjpmYWxzZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJjYW5QdWJsaXNoRGF0YSI6ZmFsc2UsImhpZGRlbiI6dHJ1ZX0sIm1ldGFkYXRhIjoie1wicm9sZVwiOlwidmlld2VyXCJ9IiwibmFtZSI6IlZpZXdlciAtMTIzIiwiaXNzIjoiQVBJcGFubXdYWkI0REFvIiwic3ViIjoidGVzdC12aWV3ZXItMTIzIiwiZXhwIjoxNzU3OTkwNzA3LCJuYmYiOjAsImlhdCI6MTc1Nzk4NzEwN30.wjGwmDgPOqo-nShTNd_ve_77EKszN1xSpppzDgIKAaI";
+
+        const LIVEKIT_URL = "wss://pump-udxzob1q.livekit.cloud";
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const colorClass = type === 'error' ? 'error' : type === 'success' ? 'success' : '';
+            logDiv.innerHTML += `<div class="${colorClass}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        async function connectAsStreamer() {
+            await connect(STREAMER_TOKEN, 'Streamer');
+        }
+
+        async function connectAsViewer() {
+            await connect(VIEWER_TOKEN, 'Viewer');
+        }
+
+        async function connect(token, role) {
+            try {
+                log(`Connecting as ${role}...`);
+                statusSpan.textContent = 'Connecting...';
+                statusSpan.className = '';
+
+                // Create room if not exists
+                if (!room) {
+                    // Check if LiveKit is loaded
+                    if (typeof LivekitClient === 'undefined' && typeof window.LivekitClient === 'undefined') {
+                        // Try alternative names
+                        if (typeof livekit !== 'undefined') {
+                            window.LivekitClient = livekit;
+                        } else if (typeof LiveKit !== 'undefined') {
+                            window.LivekitClient = LiveKit;
+                        } else {
+                            throw new Error('LiveKit client library not loaded. Please refresh the page.');
+                        }
+                    }
+
+                    const LK = window.LivekitClient || LivekitClient;
+                    room = new LK.Room({
+                        audioCaptureDefaults: {
+                            autoGainControl: true,
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                        },
+                        adaptiveStream: true,
+                        dynacast: true,
+                    });
+
+                    // Set up event handlers
+                    room.on(LK.RoomEvent.Connected, () => {
+                        log(`Connected as ${role}!`, 'success');
+                        statusSpan.textContent = `Connected as ${role}`;
+                        statusSpan.className = 'success';
+
+                        if (role === 'Streamer') {
+                            enableMicrophone();
+                        }
+                    });
+
+                    room.on(LK.RoomEvent.Disconnected, () => {
+                        log('Disconnected from room');
+                        statusSpan.textContent = 'Disconnected';
+                        statusSpan.className = 'error';
+                    });
+
+                    room.on(LK.RoomEvent.ParticipantConnected, (participant) => {
+                        log(`Participant connected: ${participant.identity}`, 'success');
+                    });
+
+                    room.on(LK.RoomEvent.ParticipantDisconnected, (participant) => {
+                        log(`Participant disconnected: ${participant.identity}`);
+                    });
+
+                    room.on(LK.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                        log(`Subscribed to ${participant.identity}'s ${track.kind} track`, 'success');
+                        if (track.kind === 'audio') {
+                            const audioElement = track.attach();
+                            document.body.appendChild(audioElement);
+                        }
+                    });
+                }
+
+                // Connect to room
+                await room.connect(LIVEKIT_URL, token);
+
+            } catch (error) {
+                log(`Connection failed: ${error.message}`, 'error');
+                statusSpan.textContent = 'Connection failed';
+                statusSpan.className = 'error';
+                console.error(error);
+            }
+        }
+
+        async function enableMicrophone() {
+            try {
+                await room.localParticipant.setMicrophoneEnabled(true);
+                log('Microphone enabled', 'success');
+            } catch (error) {
+                log(`Failed to enable microphone: ${error.message}`, 'error');
+            }
+        }
+
+        function disconnect() {
+            if (room) {
+                room.disconnect();
+                room = null;
+                log('Disconnected');
+            }
+        }
+
+        // Log initial state
+        log('LiveKit test page loaded');
+        log(`LiveKit URL: ${LIVEKIT_URL}`);
+    </script>
+</body>
+</html>

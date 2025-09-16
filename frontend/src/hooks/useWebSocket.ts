@@ -18,12 +18,24 @@ export interface ChatMessage {
 }
 
 interface WebSocketMessage {
-  type: 'message' | 'system' | 'connection' | 'history' | 'error' | 'pong'
-  data?: ChatMessage | ChatMessage[]
+  type: 'message' | 'system' | 'connection' | 'history' | 'error' | 'pong' | 'audio_summon' | 'audio_join_request'
+  data?: ChatMessage | ChatMessage[] | AudioSummonData | AudioJoinRequest
   message?: string
   status?: string
   room_id?: string
   user_count?: number
+}
+
+interface AudioSummonData {
+  audio_room_id: string
+  streamers: string[]
+  message: string
+}
+
+interface AudioJoinRequest {
+  audio_room_id: string
+  join_url: string
+  message: string
 }
 
 export function useWebSocket(roomId: string, streamPair?: any) {
@@ -33,6 +45,8 @@ export function useWebSocket(roomId: string, streamPair?: any) {
   const [isConnected, setIsConnected] = useState(false)
   const [userCount, setUserCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [audioSummon, setAudioSummon] = useState<AudioSummonData | null>(null)
+  const [audioJoinRequest, setAudioJoinRequest] = useState<AudioJoinRequest | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
   const reconnectAttempts = useRef(0)
   const maxReconnectAttempts = 5
@@ -129,6 +143,20 @@ export function useWebSocket(roomId: string, streamPair?: any) {
             case 'error':
               console.error('WebSocket error:', data.message)
               setError(data.message || 'Unknown error')
+              break
+
+            case 'audio_summon':
+              if (data.data) {
+                console.log('Received audio summon:', data.data)
+                setAudioSummon(data.data as AudioSummonData)
+              }
+              break
+
+            case 'audio_join_request':
+              if (data.data) {
+                console.log('Received audio join request:', data.data)
+                setAudioJoinRequest(data.data as AudioJoinRequest)
+              }
               break
 
             case 'pong':
@@ -269,6 +297,8 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     isConnected,
     userCount,
     error,
+    audioSummon,
+    audioJoinRequest,
     sendMessage,
     connect,
     disconnect,

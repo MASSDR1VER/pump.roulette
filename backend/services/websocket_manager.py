@@ -463,6 +463,59 @@ class WebSocketManager:
             "data": message.to_dict()
         })
 
+    async def send_audio_summon(
+        self,
+        room_id: str,
+        streamer_a_id: str,
+        streamer_b_id: str,
+        audio_room_id: str,
+        join_url_a: str,
+        join_url_b: str
+    ) -> None:
+        """
+        Send audio summon notifications to streamers.
+
+        Args:
+            room_id (str): The chat room identifier
+            streamer_a_id (str): First streamer's ID
+            streamer_b_id (str): Second streamer's ID
+            audio_room_id (str): The audio room ID
+            join_url_a (str): Join URL for streamer A
+            join_url_b (str): Join URL for streamer B
+        """
+        # Send summon notification to all users in the room
+        await self.broadcast_to_room(room_id, {
+            "type": "audio_summon",
+            "data": {
+                "audio_room_id": audio_room_id,
+                "streamers": [streamer_a_id, streamer_b_id],
+                "message": "Streamers are being summoned for audio conversation!"
+            }
+        })
+
+        # Send specific join URLs to each streamer if they're connected
+        room = self.rooms.get(room_id)
+        if room:
+            for connection in room.connections:
+                if connection.user_id == streamer_a_id:
+                    await self._send_to_connection(connection, {
+                        "type": "audio_join_request",
+                        "data": {
+                            "audio_room_id": audio_room_id,
+                            "join_url": join_url_a,
+                            "message": "You've been summoned to join the audio conversation!"
+                        }
+                    })
+                elif connection.user_id == streamer_b_id:
+                    await self._send_to_connection(connection, {
+                        "type": "audio_join_request",
+                        "data": {
+                            "audio_room_id": audio_room_id,
+                            "join_url": join_url_b,
+                            "message": "You've been summoned to join the audio conversation!"
+                        }
+                    })
+
     async def _send_to_connection(
         self,
         connection: UserConnection,

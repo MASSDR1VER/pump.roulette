@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_PERIOD: int = 60  # seconds
 
+    # LiveKit configuration for audio rooms
+    LIVEKIT_URL: str = "ws://localhost:7880"
+    LIVEKIT_API_KEY: str = ""
+    LIVEKIT_API_SECRET: str = ""
+
+    # Pump.fun API authentication for notifications
+    PUMPFUN_AUTH_TOKEN: str = ""  # Auth token for sending pump.fun replies
+
     class Config:
         """Pydantic configuration class"""
         env_file = ".env"

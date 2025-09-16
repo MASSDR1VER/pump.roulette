@@ -152,7 +152,7 @@ class PumpFunClient:
 
             # Log if this token has a live stream
             if is_live:
-                logger.info(f"🔴 LIVE STREAM DETECTED: {data.get('name')} ({data.get('mint')})")
+                logger.debug(f"🔴 LIVE STREAM DETECTED: {data.get('name')} ({data.get('mint')})")
 
             token_data = {
                 "mint": data["mint"],
@@ -180,7 +180,7 @@ class PumpFunClient:
             if not token:
                 token = Token(**token_data)
                 await token.insert()
-                logger.info(f"New token discovered: {token.symbol} ({token.mint})")
+                logger.debug(f"New token discovered: {token.symbol} ({token.mint})")
             else:
                 # Update market data
                 token.market_cap = token_data["market_cap"]

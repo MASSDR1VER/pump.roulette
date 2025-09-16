@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PumpRoulette Audio Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.5.7/dist/livekit-client.umd.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            max-width: 500px;
+            width: 100%;
+            margin: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+        .status {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .status-connected {
+            border: 2px solid #4CAF50;
+        }
+        .status-connecting {
+            border: 2px solid #FFC107;
+        }
+        .status-disconnected {
+            border: 2px solid #f44336;
+        }
+        .participants {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .participant {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px;
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+        }
+        .participant.speaking {
+            background: rgba(76, 175, 80, 0.3);
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        button {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid white;
+            padding: 12px 24px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        button.active {
+            background: #4CAF50;
+            border-color: #4CAF50;
+        }
+        button.danger {
+            background: #f44336;
+            border-color: #f44336;
+        }
+        .audio-level {
+            height: 6px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .audio-level-bar {
+            height: 100%;
+            background: #4CAF50;
+            transition: width 0.1s;
+        }
+        .log {
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 PumpRoulette Audio Room</h1>
+
+        <div id="status" class="status status-disconnected">
+            <div id="statusText">Not Connected</div>
+            <div id="roomInfo" style="font-size: 12px; margin-top: 5px; opacity: 0.8;"></div>
+        </div>
+
+        <div class="participants">
+            <h3>Participants</h3>
+            <div id="participants">
+                <p style="opacity: 0.5; text-align: center;">No participants yet</p>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" onclick="connectToRoom()">
+                <span>🔌</span> Connect
+            </button>
+            <button id="micBtn" onclick="toggleMic()" disabled>
+                <span id="micIcon">🎤</span> <span id="micText">Unmute</span>
+            </button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled class="danger">
+                <span>📴</span> Disconnect
+            </button>
+        </div>
+
+        <div class="audio-level">
+            <div id="audioLevelBar" class="audio-level-bar" style="width: 0%"></div>
+        </div>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        // Get URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomParam = urlParams.get('room');
+        const tokenParam = urlParams.get('token');
+
+        // LiveKit configuration
+        const LIVEKIT_URL = 'wss://pump-udxzob1q.livekit.cloud';
+        let room = null;
+        let isMuted = true;
+        let audioContext = null;
+        let analyser = null;
+        let microphone = null;
+
+        const statusDiv = document.getElementById('status');
+        const statusText = document.getElementById('statusText');
+        const roomInfo = document.getElementById('roomInfo');
+        const participantsDiv = document.getElementById('participants');
+        const connectBtn = document.getElementById('connectBtn');
+        const micBtn = document.getElementById('micBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const logDiv = document.getElementById('log');
+        const audioLevelBar = document.getElementById('audioLevelBar');
+
+        function log(msg) {
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${msg}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(msg);
+        }
+
+        function updateStatus(status, text) {
+            statusDiv.className = `status status-${status}`;
+            statusText.textContent = text;
+        }
+
+        function updateParticipants() {
+            if (!room) return;
+
+            const participants = [];
+
+            // Add local participant
+            if (room.localParticipant) {
+                participants.push({
+                    id: room.localParticipant.identity,
+                    name: room.localParticipant.name || 'You',
+                    isSpeaking: room.localParticipant.isSpeaking,
+                    isMuted: isMuted
+                });
+            }
+
+            // Add remote participants
+            if (room.participants) {
+                room.participants.forEach(p => {
+                    const audioTrack = Array.from(p.audioTracks.values())[0];
+                    participants.push({
+                        id: p.identity,
+                        name: p.name || p.identity,
+                        isSpeaking: p.isSpeaking,
+                        isMuted: !audioTrack || audioTrack.isMuted
+                    });
+                });
+            }
+
+            if (participants.length === 0) {
+                participantsDiv.innerHTML = '<p style="opacity: 0.5; text-align: center;">No participants yet</p>';
+            } else {
+                participantsDiv.innerHTML = participants.map(p => `
+                    <div class="participant ${p.isSpeaking ? 'speaking' : ''}">
+                        <span>
+                            ${p.name}
+                            ${p.id === room.localParticipant?.identity ? '(You)' : ''}
+                            ${p.isMuted ? '🔇' : ''}
+                        </span>
+                        ${p.isSpeaking ? '🗣️' : ''}
+                    </div>
+                `).join('');
+            }
+        }
+
+        async function connectToRoom() {
+            if (!tokenParam) {
+                alert('No token provided in URL. Please use the test script to generate a token.');
+                return;
+            }
+
+            try {
+                log('Connecting to LiveKit...');
+                updateStatus('connecting', 'Connecting...');
+
+                // Create room
+                const LK = window.LivekitClient || window.livekit || window.LiveKit;
+                room = new LK.Room({
+                    audioCaptureDefaults: {
+                        autoGainControl: true,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                    },
+                });
+
+                // Set up event handlers
+                room.on(LK.RoomEvent.Connected, () => {
+                    log('✅ Connected to room!');
+                    updateStatus('connected', 'Connected');
+                    roomInfo.textContent = `Room: ${roomParam || 'Unknown'}`;
+
+                    connectBtn.disabled = true;
+                    micBtn.disabled = false;
+                    disconnectBtn.disabled = false;
+
+                    updateParticipants();
+                    setupAudioMonitoring();
+                });
+
+                room.on(LK.RoomEvent.Disconnected, () => {
+                    log('Disconnected from room');
+                    updateStatus('disconnected', 'Disconnected');
+
+                    connectBtn.disabled = false;
+                    micBtn.disabled = true;
+                    disconnectBtn.disabled = true;
+                });
+
+                room.on(LK.RoomEvent.ParticipantConnected, (participant) => {
+                    log(`Participant connected: ${participant.name || participant.identity}`);
+                    updateParticipants();
+                });
+
+                room.on(LK.RoomEvent.ParticipantDisconnected, (participant) => {
+                    log(`Participant disconnected: ${participant.name || participant.identity}`);
+                    updateParticipants();
+                });
+
+                room.on(LK.RoomEvent.TrackMuted, () => updateParticipants());
+                room.on(LK.RoomEvent.TrackUnmuted, () => updateParticipants());
+                room.on(LK.RoomEvent.IsSpeakingChanged, () => updateParticipants());
+
+                room.on(LK.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                    if (track.kind === 'audio') {
+                        const element = track.attach();
+                        document.body.appendChild(element);
+                        log(`Subscribed to ${participant.name}'s audio`);
+                    }
+                });
+
+                // Connect to room
+                await room.connect(LIVEKIT_URL, tokenParam);
+
+                // Enable microphone
+                await room.localParticipant.setMicrophoneEnabled(true);
+                isMuted = false;
+                micBtn.classList.add('active');
+                document.getElementById('micIcon').textContent = '🔊';
+                document.getElementById('micText').textContent = 'Mute';
+
+            } catch (error) {
+                log(`Error: ${error.message}`);
+                updateStatus('disconnected', 'Connection failed');
+                console.error(error);
+
+                connectBtn.disabled = false;
+                micBtn.disabled = true;
+                disconnectBtn.disabled = true;
+            }
+        }
+
+        async function toggleMic() {
+            if (!room) return;
+
+            try {
+                isMuted = !isMuted;
+                await room.localParticipant.setMicrophoneEnabled(!isMuted);
+
+                if (isMuted) {
+                    micBtn.classList.remove('active');
+                    document.getElementById('micIcon').textContent = '🎤';
+                    document.getElementById('micText').textContent = 'Unmute';
+                } else {
+                    micBtn.classList.add('active');
+                    document.getElementById('micIcon').textContent = '🔊';
+                    document.getElementById('micText').textContent = 'Mute';
+                }
+
+                log(isMuted ? 'Microphone muted' : 'Microphone unmuted');
+                updateParticipants();
+            } catch (error) {
+                log(`Failed to toggle mic: ${error.message}`);
+            }
+        }
+
+        function disconnect() {
+            if (room) {
+                room.disconnect();
+                room = null;
+            }
+
+            updateStatus('disconnected', 'Disconnected');
+            connectBtn.disabled = false;
+            micBtn.disabled = true;
+            disconnectBtn.disabled = true;
+
+            participantsDiv.innerHTML = '<p style="opacity: 0.5; text-align: center;">No participants yet</p>';
+            audioLevelBar.style.width = '0%';
+        }
+
+        function setupAudioMonitoring() {
+            if (!room || !room.localParticipant) return;
+
+            // Simple audio level animation
+            let level = 0;
+            setInterval(() => {
+                if (room && room.localParticipant && !isMuted) {
+                    // Simulate audio level (in real app, would use actual audio data)
+                    level = room.localParticipant.isSpeaking ?
+                        50 + Math.random() * 50 :
+                        Math.random() * 20;
+                } else {
+                    level = 0;
+                }
+                audioLevelBar.style.width = `${level}%`;
+            }, 100);
+        }
+
+        // Auto-connect if token is provided
+        if (tokenParam && roomParam) {
+            log(`Room: ${roomParam}`);
+            log('Token found in URL. Click Connect to join.');
+            roomInfo.textContent = `Room: ${roomParam}`;
+        } else {
+            log('No token in URL. Generate one using test_audio_room_link.py');
+        }
+    </script>
+</body>
+</html>

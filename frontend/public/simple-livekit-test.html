@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple LiveKit Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        #log {
+            background: #000;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 20px;
+            min-height: 200px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>Simple LiveKit Test</h1>
+
+    <div>
+        <button onclick="loadAndConnect()">Load LiveKit and Connect</button>
+        <button onclick="checkLibrary()">Check Library Status</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        const STREAMER_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ2aWRlbyI6eyJyb29tSm9pbiI6dHJ1ZSwicm9vbSI6ImF1ZGlvX3Rlc3QtcGFpci0yMDI1MDkxNi0wNDQ1MDciLCJjYW5QdWJsaXNoIjp0cnVlLCJjYW5TdWJzY3JpYmUiOnRydWUsImNhblB1Ymxpc2hEYXRhIjp0cnVlLCJoaWRkZW4iOmZhbHNlfSwibWV0YWRhdGEiOiJ7XCJyb2xlXCI6XCJzdHJlYW1lclwiLFwiZGlzcGxheV9uYW1lXCI6XCJBbGljZVwifSIsIm5hbWUiOiJBbGljZSIsImlzcyI6IkFQSXBhbm13WFpCNERBbyIsInN1YiI6ImFsaWNlLXdhbGxldC1hZGRyZXNzIiwiZXhwIjoxNzU3OTkwNzA3LCJuYmYiOjAsImlhdCI6MTc1Nzk4NzEwN30.Cd3aGLCJY3QD47wr73y0sjMyClqmB4U9_EzMGamLk4M";
+        const LIVEKIT_URL = "wss://pump-udxzob1q.livekit.cloud";
+
+        const logDiv = document.getElementById('log');
+
+        function log(msg) {
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.textContent += `[${timestamp}] ${msg}\n`;
+            console.log(msg);
+        }
+
+        function checkLibrary() {
+            log('Checking for LiveKit library...');
+            log('typeof LivekitClient: ' + typeof LivekitClient);
+            log('typeof livekit: ' + typeof livekit);
+            log('typeof LiveKit: ' + typeof LiveKit);
+            log('Window properties: ' + Object.keys(window).filter(k => k.toLowerCase().includes('live')).join(', '));
+        }
+
+        async function loadAndConnect() {
+            log('Starting test...');
+
+            // Dynamically load LiveKit
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2.5.7/dist/livekit-client.umd.js';
+
+            script.onload = async () => {
+                log('Script loaded!');
+
+                // Check what's available
+                checkLibrary();
+
+                // Try to find the correct namespace
+                let LK = null;
+                if (typeof LivekitClient !== 'undefined') {
+                    LK = LivekitClient;
+                    log('Found LivekitClient');
+                } else if (typeof livekit !== 'undefined') {
+                    LK = livekit;
+                    log('Found livekit');
+                } else if (typeof LiveKit !== 'undefined') {
+                    LK = LiveKit;
+                    log('Found LiveKit');
+                } else if (typeof window.LivekitClient !== 'undefined') {
+                    LK = window.LivekitClient;
+                    log('Found window.LivekitClient');
+                } else {
+                    log('ERROR: Could not find LiveKit library!');
+                    return;
+                }
+
+                try {
+                    log('Creating room...');
+                    const room = new LK.Room({
+                        audioCaptureDefaults: {
+                            autoGainControl: true,
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                        },
+                    });
+
+                    room.on(LK.RoomEvent.Connected, () => {
+                        log('✅ CONNECTED!');
+                    });
+
+                    room.on(LK.RoomEvent.Disconnected, () => {
+                        log('Disconnected');
+                    });
+
+                    log('Connecting to LiveKit...');
+                    await room.connect(LIVEKIT_URL, STREAMER_TOKEN);
+
+                } catch (error) {
+                    log('ERROR: ' + error.message);
+                    console.error(error);
+                }
+            };
+
+            script.onerror = () => {
+                log('ERROR: Failed to load LiveKit script');
+            };
+
+            document.head.appendChild(script);
+        }
+
+        log('Page loaded. Click "Load LiveKit and Connect" to start test.');
+    </script>
+</body>
+</html>

@@ -10,7 +10,7 @@ import time
 import uuid
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import os
 from dotenv import load_dotenv
 
@@ -31,11 +31,20 @@ class AudioRoomService:
 
     def __init__(self):
         """Initialize the audio room service with LiveKit configuration."""
-        # LiveKit Cloud configuration
-        # We'll use the same LiveKit instance as Pump.fun for compatibility
-        self.livekit_url = "wss://pump-prod-tg2x8veh.livekit.cloud"
-        self.api_key = os.getenv("LIVEKIT_API_KEY", "APIdURVfRJjV9sP")
-        self.api_secret = os.getenv("LIVEKIT_API_SECRET", "KHbc/hmFL/EL8h/b+JedEg==")
+        # LiveKit Cloud configuration from environment variables
+        self.livekit_url = os.getenv("LIVEKIT_URL", "wss://localhost:7880")
+        self.api_key = os.getenv("LIVEKIT_API_KEY", "")
+        self.api_secret = os.getenv("LIVEKIT_API_SECRET", "")
+
+        # Validate LiveKit credentials
+        if not self.api_key or not self.api_secret:
+            logger.warning(
+                "LiveKit API credentials not configured. Audio rooms will not work. "
+                "Please set LIVEKIT_API_KEY and LIVEKIT_API_SECRET environment variables."
+            )
+            # For development, you can use LiveKit's test server
+            # Get free cloud account at: https://cloud.livekit.io
+            # Or run locally: docker run --rm -p 7880:7880 livekit/livekit-server --dev
 
         # Store active rooms
         self.active_rooms: Dict[str, Dict[str, Any]] = {}
@@ -88,6 +97,19 @@ class AudioRoomService:
         self.active_rooms[pair_id] = room_info
 
         logger.info(f"Created audio room for pair {pair_id}")
+
+        # Log test link for manual testing
+        logger.info("=" * 80)
+        logger.info("🎤 AUDIO ROOM TEST LINK:")
+        logger.info(f"Room: {room_name}")
+        logger.info(f"Open this in browser to test as streamer:")
+        logger.info(f"http://localhost:3001/?room={pair_id}")
+        logger.info("Streamer A Token:")
+        logger.info(token_a)
+        logger.info("Streamer B Token:")
+        logger.info(token_b)
+        logger.info("=" * 80)
+
         return room_info
 
     def _generate_streamer_token(self, room_name: str, user_id: str, display_name: str) -> str:
@@ -284,3 +306,218 @@ class AudioRoomService:
                 for pair_id, room in self.active_rooms.items()
             ]
         }
+
+    async def can_user_join_room(self, pair_id: str, user_id: str) -> bool:
+        """
+        Check if a user can join an audio room.
+
+        Args:
+            pair_id: Stream pair identifier
+            user_id: User identifier
+
+        Returns:
+            True if user can join, False otherwise
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            return False
+
+        # Check if user is one of the streamers
+        return (
+            room_info["streamer_a"]["id"] == user_id or
+            room_info["streamer_b"]["id"] == user_id
+        )
+
+    async def add_participant(self, pair_id: str, user_id: str, username: Optional[str], role: str) -> bool:
+        """
+        Add a participant to the room tracking.
+
+        Args:
+            pair_id: Stream pair identifier
+            user_id: User identifier
+            username: Optional username
+            role: User role
+
+        Returns:
+            True if successful
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            return False
+
+        # Mark streamer as joined
+        if role in ["streamer", "moderator"]:
+            return await self.mark_streamer_joined(pair_id, user_id)
+
+        # Increment viewer count
+        if role in ["viewer", "listener"]:
+            room_info["viewer_count"] += 1
+
+        return True
+
+    async def remove_participant(self, pair_id: str, user_id: str) -> bool:
+        """
+        Remove a participant from the room.
+
+        Args:
+            pair_id: Stream pair identifier
+            user_id: User identifier
+
+        Returns:
+            True if successful
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            return False
+
+        # Check if it's a streamer
+        if room_info["streamer_a"]["id"] == user_id:
+            room_info["streamer_a"]["joined"] = False
+            logger.info(f"Streamer A left room {pair_id}")
+        elif room_info["streamer_b"]["id"] == user_id:
+            room_info["streamer_b"]["joined"] = False
+            logger.info(f"Streamer B left room {pair_id}")
+        else:
+            # Decrement viewer count
+            room_info["viewer_count"] = max(0, room_info["viewer_count"] - 1)
+
+        return True
+
+    async def get_room_config(self, pair_id: str) -> Dict[str, Any]:
+        """
+        Get room configuration.
+
+        Args:
+            pair_id: Stream pair identifier
+
+        Returns:
+            Room configuration dictionary
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            return {}
+
+        return {
+            "room_name": room_info["room_name"],
+            "livekit_url": self.livekit_url,
+            "max_participants": 100,
+            "audio_only": True,
+            "echo_cancellation": True,
+            "noise_suppression": True,
+            "auto_gain_control": True
+        }
+
+    async def get_room_by_stream_pair(self, pair_id: str) -> Optional[str]:
+        """
+        Get room ID by stream pair.
+
+        Args:
+            pair_id: Stream pair identifier
+
+        Returns:
+            Room ID or None
+        """
+        if pair_id in self.active_rooms:
+            return pair_id
+        return None
+
+    async def get_room_participants(self, pair_id: str) -> List[Dict[str, Any]]:
+        """
+        Get list of room participants.
+
+        Args:
+            pair_id: Stream pair identifier
+
+        Returns:
+            List of participant information
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            return []
+
+        participants = []
+
+        # Add streamers if joined
+        if room_info["streamer_a"]["joined"]:
+            participants.append({
+                "id": room_info["streamer_a"]["id"],
+                "role": "streamer",
+                "name": "Streamer A",
+                "joined_at": room_info["streamer_a"].get("joined_at", room_info["created_at"]).isoformat()
+            })
+
+        if room_info["streamer_b"]["joined"]:
+            participants.append({
+                "id": room_info["streamer_b"]["id"],
+                "role": "streamer",
+                "name": "Streamer B",
+                "joined_at": room_info["streamer_b"].get("joined_at", room_info["created_at"]).isoformat()
+            })
+
+        return participants
+
+    async def get_listener_count(self, pair_id: str) -> int:
+        """
+        Get the number of listeners in a room.
+
+        Args:
+            pair_id: Stream pair identifier
+
+        Returns:
+            Number of listeners
+        """
+        room_info = self.active_rooms.get(pair_id)
+        return room_info["viewer_count"] if room_info else 0
+
+    async def can_user_close_room(self, pair_id: str, user_id: str) -> bool:
+        """
+        Check if a user can close a room.
+
+        Args:
+            pair_id: Stream pair identifier
+            user_id: User identifier
+
+        Returns:
+            True if user can close the room
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            return False
+
+        # Only streamers or moderators can close rooms
+        return (
+            room_info["streamer_a"]["id"] == user_id or
+            room_info["streamer_b"]["id"] == user_id
+        )
+
+    async def close_room(self, pair_id: str) -> bool:
+        """
+        Close an audio room.
+
+        Args:
+            pair_id: Stream pair identifier
+
+        Returns:
+            True if room was closed
+        """
+        return await self.cleanup_room(pair_id)
+
+    async def get_active_rooms(self) -> List[Dict[str, Any]]:
+        """
+        Get list of all active rooms.
+
+        Returns:
+            List of active room information
+        """
+        return [
+            {
+                "pair_id": pair_id,
+                "room_name": room["room_name"],
+                "streamer_a_joined": room["streamer_a"]["joined"],
+                "streamer_b_joined": room["streamer_b"]["joined"],
+                "viewer_count": room["viewer_count"],
+                "created_at": room["created_at"].isoformat(),
+                "expires_at": room["expires_at"].isoformat()
+            }
+            for pair_id, room in self.active_rooms.items()
+        ]

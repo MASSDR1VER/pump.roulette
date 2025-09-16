@@ -6,12 +6,13 @@ API endpoints for wallet-authenticated audio room creation, joining, and streami
 
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 import logging
 
 from services.wallet_auth_service import WalletAuthService
 from services.audio_room_service import AudioRoomService
+from services.pumpfun_notification_service import PumpFunNotificationService
 from api.v1.endpoints.auth import get_current_user, get_wallet_auth_service
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ class SummonStreamersRequest(BaseModel):
     stream_pair_id: str = Field(..., description="Stream pair identifier")
     streamer_a_id: str = Field(..., description="First streamer's identifier")
     streamer_b_id: str = Field(..., description="Second streamer's identifier")
+    stream_1_mint: Optional[str] = Field(None, description="First stream's token mint address")
+    stream_2_mint: Optional[str] = Field(None, description="Second stream's token mint address")
 
 class SummonStreamersResponse(BaseModel):
     """Response model for summoning streamers."""
@@ -32,6 +35,8 @@ class SummonStreamersResponse(BaseModel):
     room_id: str
     room_token: str
     audio_endpoint: str
+    streamer_a_url: Optional[str] = None
+    streamer_b_url: Optional[str] = None
 
 class JoinAudioRoomRequest(BaseModel):
     """Request model for joining audio room."""
@@ -77,12 +82,19 @@ def get_audio_service(request: Request):
     return request.app.state.audio_room_service
 
 
+def get_notification_service() -> PumpFunNotificationService:
+    """Dependency to get notification service."""
+    return PumpFunNotificationService()
+
+
 @router.post("/summon", response_model=SummonStreamersResponse)
 async def summon_streamers(
     request: SummonStreamersRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
     auth_service: WalletAuthService = Depends(get_wallet_auth_service),
-    audio_service: AudioRoomService = Depends(get_audio_room_service)
+    audio_service: AudioRoomService = Depends(get_audio_room_service),
+    notification_service: PumpFunNotificationService = Depends(get_notification_service),
+    request_ctx: Request = None
 ) -> SummonStreamersResponse:
     """
     Summon streamers to join an audio room.
@@ -107,19 +119,60 @@ async def summon_streamers(
             streamer_b_id=request.streamer_b_id
         )
 
-        # Generate room token for the creator
-        room_token = auth_service.create_audio_room_token(
+        # Generate LiveKit token for the creator/moderator
+        # This should be a LiveKit token, not a wallet auth token
+        # The creator who summons gets a moderator token to join the audio room
+        moderator_token = audio_service._generate_streamer_token(
+            room_data["room_name"],
             current_user["wallet_address"],
-            room_data["room_name"],  # Use room_name instead of room_id
-            role="moderator"
+            current_user.get("display_name", current_user["wallet_address"][:8])
         )
+
+        # Send pump.fun notifications to streamers if mint addresses are provided
+        if request.stream_1_mint and request.stream_2_mint:
+            try:
+                notification_results = await notification_service.notify_both_streamers(
+                    stream_1_mint=request.stream_1_mint,
+                    stream_2_mint=request.stream_2_mint,
+                    room_id=room_data["pair_id"]
+                )
+                logger.info(f"Pump.fun notifications sent: {notification_results}")
+            except Exception as e:
+                logger.error(f"Failed to send pump.fun notifications: {e}")
+                # Continue even if notifications fail
+
+        # Send WebSocket notifications to streamers if available
+        if request_ctx and hasattr(request_ctx.app.state, 'websocket_manager'):
+            ws_manager = request_ctx.app.state.websocket_manager
+            await ws_manager.send_audio_summon(
+                room_id=request.stream_pair_id,
+                streamer_a_id=request.streamer_a_id,
+                streamer_b_id=request.streamer_b_id,
+                audio_room_id=room_data["pair_id"],
+                join_url_a=room_data["streamer_a"]["join_url"],
+                join_url_b=room_data["streamer_b"]["join_url"]
+            )
+
+        # Generate frontend URLs for streamers (use correct port)
+        base_url = "http://localhost:3001"  # Frontend port
+        streamer_a_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_a']['token']}"
+        streamer_b_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_b']['token']}"
+
+        # Log the URLs for testing
+        logger.info("=" * 80)
+        logger.info("🎤 AUDIO ROOM CREATED - STREAMER LINKS:")
+        logger.info(f"Streamer A: {streamer_a_url}")
+        logger.info(f"Streamer B: {streamer_b_url}")
+        logger.info("=" * 80)
 
         return SummonStreamersResponse(
             success=True,
             message="Audio room created successfully. Waiting for streamers to join.",
             room_id=room_data["pair_id"],  # Use pair_id as room_id
-            room_token=room_token,
-            audio_endpoint=f"wss://pump-prod-tg2x8veh.livekit.cloud"  # LiveKit endpoint
+            room_token=moderator_token,  # Return LiveKit token, not wallet auth token
+            audio_endpoint=audio_service.livekit_url,  # Use configured LiveKit URL
+            streamer_a_url=streamer_a_url,
+            streamer_b_url=streamer_b_url
         )
 
     except Exception as e:
@@ -220,12 +273,14 @@ async def get_audio_stream(
         if not room_info:
             raise HTTPException(status_code=404, detail="Audio room not found")
 
-        # Generate viewer token (no wallet required for listening)
-        viewer_token = auth_service.create_audio_room_token(
-            f"viewer_{datetime.now().timestamp()}",
-            room_id,
-            role="listener"
+        # Generate LiveKit viewer token (no wallet required for listening)
+        viewer_token = audio_service.generate_viewer_token(
+            pair_id=pair_id,
+            viewer_id=f"viewer_{datetime.now().timestamp()}"
         )
+
+        if not viewer_token:
+            raise HTTPException(status_code=404, detail="Could not generate viewer token")
 
         # Get participants and listener count
         participants = await audio_service.get_room_participants(room_id)
