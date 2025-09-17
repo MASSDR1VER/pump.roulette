@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com'
 
 interface AudioTokens {
   room_id: string

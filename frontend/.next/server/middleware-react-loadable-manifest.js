@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST='{"../node_modules/.pnpm/@tanstack+query-devtools@5.83.1/node_modules/@tanstack/query-devtools/build/index.js -> ./DevtoolsComponent/JH472VU3.js":{"id":null,"files":[]},"../node_modules/.pnpm/@tanstack+query-devtools@5.83.1/node_modules/@tanstack/query-devtools/build/index.js -> ./DevtoolsPanelComponent/OPQFORGE.js":{"id":null,"files":[]}}';

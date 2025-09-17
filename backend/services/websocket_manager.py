@@ -229,6 +229,7 @@ class WebSocketManager:
         Returns:
             UserConnection: The created connection object
         """
+        logger.info(f"WebSocketManager.connect called - user_id={user_id}, room_id={room_id}")
         # Note: WebSocket is already accepted in the endpoint
 
         # Create user connection
@@ -350,12 +351,16 @@ class WebSocketManager:
         Returns:
             Optional[ChatMessage]: The created message or None if rejected
         """
+        logger.info(f"handle_message called for user_id={user_id}, content={message_content[:50]}...")
+
         connection = self.connections.get(user_id)
         if not connection:
+            logger.warning(f"No connection found for user_id={user_id}")
             return None
 
         # Rate limiting check
         if not self._check_rate_limit(connection):
+            logger.info(f"Rate limit exceeded for user {user_id}")
             await self._send_to_connection(connection, {
                 "type": "error",
                 "message": "Rate limit exceeded. Please slow down."
@@ -364,6 +369,7 @@ class WebSocketManager:
 
         # Message length check
         if len(message_content) > settings.WEBSOCKET_MESSAGE_LIMIT:
+            logger.info(f"Message too long from user {user_id}")
             await self._send_to_connection(connection, {
                 "type": "error",
                 "message": f"Message too long. Maximum {settings.WEBSOCKET_MESSAGE_LIMIT} characters."
@@ -373,6 +379,7 @@ class WebSocketManager:
         # Content moderation
         if settings.ENABLE_CHAT_MODERATION:
             if not await self._moderate_content(message_content):
+                logger.info(f"Message blocked by moderation for user {user_id}")
                 await self._send_to_connection(connection, {
                     "type": "error",
                     "message": "Message contains prohibited content."
@@ -391,20 +398,24 @@ class WebSocketManager:
             profile_image=connection.profile_image,
             reply_to=reply_to
         )
+        logger.info(f"Created message {message.id} for room {connection.room_id}")
 
         # Add to room history
         room = self.rooms.get(connection.room_id)
         if room:
             room.add_message(message)
+            logger.info(f"Added message to room history, room now has {len(room.message_history)} messages")
 
         # Update rate limit counters
         connection.message_count += 1
         connection.last_message_time = datetime.utcnow()
 
         # Broadcast to room
+        message_dict = message.to_dict()
+        logger.info(f"Broadcasting message to room {connection.room_id}, message data: {message_dict}")
         await self.broadcast_to_room(connection.room_id, {
             "type": "message",
-            "data": message.to_dict()
+            "data": message_dict
         })
 
         return message

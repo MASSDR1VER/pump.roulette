@@ -204,18 +204,33 @@ async def get_room_info(room_id: str):
 @router.websocket("/ws/{room_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
-    room_id: str,
-    user_id: Optional[str] = Query(None),
-    username: Optional[str] = Query(None),
-    stream_1: Optional[str] = Query(None),
-    stream_2: Optional[str] = Query(None),
-    profile_image: Optional[str] = Query(None)
+    room_id: str
 ):
     """
     WebSocket endpoint for real-time chat.
 
     Simplified implementation that works correctly with FastAPI.
     """
+    # Get query parameters from WebSocket scope
+    query_params = websocket.scope.get('query_string', b'').decode('utf-8')
+    logger.info(f"Raw query string: {query_params}")
+
+    # Parse query parameters manually
+    from urllib.parse import parse_qs
+    params = parse_qs(query_params)
+
+    # Extract parameters
+    user_id = params.get('user_id', [None])[0]
+    username = params.get('username', [None])[0]
+    profile_image = params.get('profile_image', [None])[0]
+    stream_1 = params.get('stream_1', [None])[0]
+    stream_2 = params.get('stream_2', [None])[0]
+
+    # Log all query parameters for debugging
+    logger.info(f"WebSocket connection request - room: {room_id}")
+    logger.info(f"Query params - user_id: {user_id}, username: {username}, profile_image: {profile_image}")
+    logger.info(f"Stream params - stream_1: {stream_1}, stream_2: {stream_2}")
+
     # Accept the WebSocket connection
     await websocket.accept()
     logger.info(f"WebSocket accepted for room {room_id}, user: {user_id}, username: {username}")
@@ -237,6 +252,7 @@ async def websocket_endpoint(
         scope = websocket.scope
         app = scope["app"]
         websocket_manager = app.state.websocket_manager
+        logger.info(f"Got websocket_manager instance: {websocket_manager is not None}")
 
         # Try to get full stream data if we have room_id
         stream_pair = None
@@ -255,15 +271,21 @@ async def websocket_endpoint(
 
         # Connect to the chat room
         logger.info(f"Attempting to connect to WebSocket manager for room {room_id}")
-        connection = await websocket_manager.connect(
-            websocket=websocket,
-            user_id=user_id,
-            username=username,
-            room_id=room_id,
-            stream_pair=stream_pair,
-            profile_image=profile_image
-        )
-        logger.info(f"Successfully connected to WebSocket manager")
+        try:
+            connection = await websocket_manager.connect(
+                websocket=websocket,
+                user_id=user_id,
+                username=username,
+                room_id=room_id,
+                stream_pair=stream_pair,
+                profile_image=profile_image
+            )
+            logger.info(f"Successfully connected to WebSocket manager")
+        except Exception as conn_err:
+            logger.error(f"Failed to connect to WebSocket manager: {conn_err}")
+            import traceback
+            logger.error(f"Connection traceback: {traceback.format_exc()}")
+            raise
 
         logger.info(f"WebSocket connected: {user_id} in room {room_id}")
 
@@ -277,8 +299,10 @@ async def websocket_endpoint(
                 if data.get("type") == "message":
                     content = data.get("content", "").strip()
                     reply_to = data.get("reply_to")
+                    logger.info(f"Received message from {user_id}: {content[:50]}...")
                     if content:
-                        await websocket_manager.handle_message(user_id, content, reply_to=reply_to)
+                        result = await websocket_manager.handle_message(user_id, content, reply_to=reply_to)
+                        logger.info(f"Message handling result: {result is not None}")
 
                 elif data.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})

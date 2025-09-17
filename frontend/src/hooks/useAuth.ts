@@ -54,7 +54,7 @@ export function useAuth() {
 
   const validateToken = async (token: string) => {
     try {
-      const response = await fetch('http://localhost:8000/api/v1/auth/wallet/validate', {
+      const response = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/validate', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -83,7 +83,7 @@ export function useAuth() {
 
   const getUserProfile = async (token: string) => {
     try {
-      const response = await fetch('http://localhost:8000/api/v1/auth/wallet/profile', {
+      const response = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/profile', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -140,7 +140,7 @@ export function useAuth() {
       console.log('Wallet connected:', walletAddress)
 
       // Step 1: Get authentication message
-      const connectResponse = await fetch('http://localhost:8000/api/v1/auth/wallet/connect', {
+      const connectResponse = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/connect', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -163,7 +163,7 @@ export function useAuth() {
       console.log('Message signed successfully')
 
       // Step 3: Verify signature and get token
-      const verifyResponse = await fetch('http://localhost:8000/api/v1/auth/wallet/verify', {
+      const verifyResponse = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/verify', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -208,7 +208,7 @@ export function useAuth() {
       wallet_address: `guest_${Date.now()}`,
       username: `Guest${Math.floor(Math.random() * 10000)}`,
       display_name: `Guest${Math.floor(Math.random() * 10000)}`,
-      profile_image: `https://ui-avatars.com/api/?name=Guest&background=666&color=fff&size=64&rounded=true`,
+      profile_image: 'https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=93&img-dpr=2&img-onerror=redirect',
       is_verified: false,
       is_premium: false,
       reputation_score: 0,

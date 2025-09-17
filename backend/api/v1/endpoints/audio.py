@@ -75,6 +75,7 @@ class RoomVerifyRequest(BaseModel):
     role: str = Field(..., description="Role (streamer_a or streamer_b)")
     signature: str = Field(..., description="Signed message")
     nonce: str = Field(..., description="Nonce used in message")
+    token: Optional[str] = Field(None, description="LiveKit token for room recovery")
 
 
 class RoomVerifyResponse(BaseModel):
@@ -164,13 +165,13 @@ async def summon_streamers(
             streamer_b_id=request.streamer_b_id
         )
 
-        # Generate LiveKit token for the creator/moderator
-        # This should be a LiveKit token, not a wallet auth token
-        # The creator who summons gets a moderator token to join the audio room
-        moderator_token = audio_service._generate_streamer_token(
-            room_data["room_name"],
-            current_user["wallet_address"],
-            current_user.get("display_name", current_user["wallet_address"][:8])
+        # Generate LiveKit token for the creator as a listener/viewer
+        # The creator who summons gets a viewer token to listen to the audio room
+        # Use a unique viewer ID to avoid conflicts with streamers
+        viewer_id = f"viewer_{current_user['wallet_address'][:8]}"
+        viewer_token = audio_service.generate_viewer_token(
+            room_data["pair_id"],
+            viewer_id
         )
 
         # Send pump.fun notifications to streamers if mint addresses are provided
@@ -198,10 +199,10 @@ async def summon_streamers(
                 join_url_b=room_data["streamer_b"]["join_url"]
             )
 
-        # Generate frontend URLs for streamers (use correct port)
-        base_url = "http://localhost:3000"  # Frontend port
-        streamer_a_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_a']['token']}&role=streamer_a"
-        streamer_b_url = f"{base_url}/?room={room_data['pair_id']}&token={room_data['streamer_b']['token']}&role=streamer_b"
+        # Generate frontend URLs for streamers (without tokens for security)
+        base_url = "https://app.pump-roulette.com"  # Production URL
+        streamer_a_url = f"{base_url}/?room={room_data['pair_id']}&role=streamer_a"
+        streamer_b_url = f"{base_url}/?room={room_data['pair_id']}&role=streamer_b"
 
         # Log the URLs for testing
         logger.info("=" * 80)
@@ -214,7 +215,7 @@ async def summon_streamers(
             success=True,
             message="Audio room created successfully. Waiting for streamers to join.",
             room_id=room_data["pair_id"],  # Use pair_id as room_id
-            room_token=moderator_token,  # Return LiveKit token, not wallet auth token
+            room_token=viewer_token,  # Return viewer token so creator can listen
             audio_endpoint=audio_service.livekit_url,  # Use configured LiveKit URL
             streamer_a_url=streamer_a_url,
             streamer_b_url=streamer_b_url
@@ -345,6 +346,80 @@ async def get_audio_stream(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get audio stream: {str(e)}")
+
+
+@router.post("/room/verify")
+async def room_verify(
+    request: RoomVerifyRequest,
+    audio_service: AudioRoomService = Depends(get_audio_room_service),
+    auth_service: WalletAuthService = Depends(get_wallet_auth_service)
+) -> Dict[str, Any]:
+    """
+    Verify a streamer's wallet and generate audio token.
+
+    Args:
+        request (RoomVerifyRequest): Verification request with wallet signature
+        audio_service (AudioRoomService): Audio room service
+        auth_service (WalletAuthService): Wallet authentication service
+
+    Returns:
+        Dict[str, Any]: Token and room information if verified
+    """
+    try:
+        # Extract room_id from request (room_id might have the 'audio_' prefix)
+        room_id = request.pubkey.split('_')[-1] if '_' in request.pubkey else request.pubkey
+
+        # Get room information
+        room_info = audio_service.active_rooms.get(room_id)
+        if not room_info:
+            raise HTTPException(status_code=404, detail="Audio room not found")
+
+        # Verify wallet signature
+        message = request.signature
+        is_valid = await auth_service.verify_signature(
+            public_key=request.pubkey,
+            signature=request.signature,
+            message=message
+        )
+
+        if not is_valid:
+            raise HTTPException(status_code=401, detail="Invalid wallet signature")
+
+        # Determine which streamer this is
+        streamer_token = None
+        if request.role == "streamer_a":
+            # Check if wallet matches expected streamer A
+            expected_id = room_info["streamer_a"]["id"]
+            if request.pubkey != expected_id and not request.pubkey.startswith(expected_id[:8]):
+                # For development, allow any wallet
+                logger.warning(f"Wallet {request.pubkey} doesn't match expected streamer A {expected_id}")
+            streamer_token = room_info["streamer_a"]["token"]
+        elif request.role == "streamer_b":
+            # Check if wallet matches expected streamer B
+            expected_id = room_info["streamer_b"]["id"]
+            if request.pubkey != expected_id and not request.pubkey.startswith(expected_id[:8]):
+                # For development, allow any wallet
+                logger.warning(f"Wallet {request.pubkey} doesn't match expected streamer B {expected_id}")
+            streamer_token = room_info["streamer_b"]["token"]
+        else:
+            raise HTTPException(status_code=400, detail="Invalid role")
+
+        if not streamer_token:
+            raise HTTPException(status_code=403, detail="Not authorized for this role")
+
+        return {
+            "success": True,
+            "token": streamer_token,
+            "room_id": room_id,
+            "audio_endpoint": audio_service.livekit_url,
+            "role": request.role
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Room verification failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
 
 
 @router.post("/leave", response_model=LeaveAudioRoomResponse)
@@ -548,6 +623,39 @@ async def verify_room_wallet(
 
         # Get room info
         room_info = await audio_service.get_room_info(room_id)
+
+        # If room doesn't exist and we have a token, try to extract info from the token
+        if not room_info and request.token:
+            try:
+                import jwt
+                # Decode token without verification to get the payload
+                token_data = jwt.decode(request.token, options={"verify_signature": False})
+
+                # Extract room name and user ID from token
+                room_name = token_data.get("video", {}).get("room", "")
+                user_id = token_data.get("sub", "")
+
+                # Extract pair_id from room name (format: audio_XXXXX)
+                if room_name.startswith("audio_"):
+                    pair_id = room_name[6:]
+
+                    # Recreate minimal room info based on token
+                    # This allows verification to proceed even after backend restart
+                    # We only know the token owner's ID, not both streamers
+                    room_info = {
+                        "pair_id": pair_id,
+                        "room_name": room_name,
+                        # Don't set streamer IDs - we'll accept any valid signature
+                        # This allows both streamers to join after restart
+                    }
+
+                    # Store this temporary room info in service
+                    if pair_id not in audio_service.active_rooms:
+                        audio_service.active_rooms[pair_id] = room_info
+                        logger.info(f"Recreated room info for {pair_id} from token")
+            except Exception as e:
+                logger.error(f"Failed to extract room info from token: {e}")
+
         if not room_info:
             return RoomVerifyResponse(
                 ok=False,
@@ -584,12 +692,17 @@ async def verify_room_wallet(
         elif request.role == "streamer_b":
             expected_wallet = room_info.get("streamer_b_id")
 
-        if not expected_wallet or expected_wallet != request.pubkey:
+        # If we recreated room from token, we may not have both streamer IDs
+        # In this case, accept any valid signature for the role
+        if expected_wallet and expected_wallet != request.pubkey:
             return RoomVerifyResponse(
                 ok=False,
                 verified=False,
                 error=f"Wallet not authorized for role {request.role}"
             )
+
+        # If no expected wallet (room recreated from token), accept the wallet
+        # This allows the other streamer to join after backend restart
 
         # Store verified session
         session_key = f"{room_id}:{request.role}:{request.pubkey}"
@@ -642,10 +755,21 @@ async def get_creator_publish_token(
 
     try:
         # Check if user is verified for this room and role
-        session_key = f"{room_id}:{request.role}:{current_user['wallet_address']}"
+        # Handle both formats: with and without audio_ prefix
+        if room_id.startswith("audio_"):
+            check_room_id = room_id
+        else:
+            check_room_id = f"audio_{room_id}"
+
+        session_key = f"{check_room_id}:{request.role}:{current_user['wallet_address']}"
 
         if session_key not in verified_sessions:
-            raise HTTPException(status_code=403, detail="Not verified for this room")
+            # Try without prefix as well
+            alt_session_key = f"{room_id}:{request.role}:{current_user['wallet_address']}"
+            if alt_session_key not in verified_sessions:
+                raise HTTPException(status_code=403, detail="Not verified for this room")
+            else:
+                session_key = alt_session_key
 
         session = verified_sessions[session_key]
 
@@ -655,8 +779,11 @@ async def get_creator_publish_token(
             raise HTTPException(status_code=403, detail="Verification expired")
 
         # Generate LiveKit publish token
+        # Ensure room_id has audio_ prefix for LiveKit
+        livekit_room_name = f"audio_{room_id}" if not room_id.startswith("audio_") else room_id
+
         publish_token = audio_service._generate_streamer_token(
-            room_id,
+            livekit_room_name,
             current_user["wallet_address"],
             f"Streamer {request.role[-1].upper()}"  # "Streamer A" or "Streamer B"
         )

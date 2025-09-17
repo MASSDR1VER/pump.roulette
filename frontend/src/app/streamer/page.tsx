@@ -58,7 +58,7 @@ export default function StreamerPage() {
     setIsJoining(true)
     try {
       const token = localStorage.getItem('auth_token')
-      const response = await fetch('http://localhost:8000/api/v1/audio/join', {
+      const response = await fetch('https://app.pump-roulette.com/api/v1/audio/join', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -103,7 +103,7 @@ export default function StreamerPage() {
 
     try {
       const token = localStorage.getItem('auth_token')
-      await fetch('http://localhost:8000/api/v1/audio/leave', {
+      await fetch('https://app.pump-roulette.com/api/v1/audio/leave', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

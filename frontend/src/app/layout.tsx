@@ -4,6 +4,7 @@ import "./globals.css";
 import { ReactQueryProvider } from "@/lib/react-query-provider";
 import { config } from "@/lib/config";
 import { Toaster } from 'react-hot-toast';
+import { Suspense } from 'react';
 
 const inter = Inter({
   subsets: ["latin"],
@@ -32,7 +33,16 @@ export default function RootLayout({
     <html lang="en" className="dark" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased dark`} suppressHydrationWarning>
         <ReactQueryProvider>
-          {children}
+          <Suspense fallback={
+            <div className="h-screen bg-[#15161B] flex items-center justify-center">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4"></div>
+                <p className="text-gray-400">Loading...</p>
+              </div>
+            </div>
+          }>
+            {children}
+          </Suspense>
           <Toaster position="top-right" />
         </ReactQueryProvider>
       </body>

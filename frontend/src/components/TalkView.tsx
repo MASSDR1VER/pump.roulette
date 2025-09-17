@@ -36,14 +36,14 @@ import {
 } from '@/lib/livekit-audio'
 
 // API base URL
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com/api/v1'
 
 // LiveKit endpoint
-const LIVEKIT_ENDPOINT = 'wss://pump-prod-tg2x8veh.livekit.cloud'
+const LIVEKIT_ENDPOINT = 'wss://pump-udxzob1q.livekit.cloud'
 
 interface TalkViewProps {
   roomId: string
-  token: string
+  token?: string  // Optional now, will be fetched after wallet verification
   role: string
   onClose: () => void
 }
@@ -56,12 +56,31 @@ export function TalkView({ roomId, token, role, onClose }: TalkViewProps) {
   const [wallet, setWallet] = useState<WalletConnection | null>(null)
   const [verificationState, setVerificationState] = useState<VerificationState>('idle')
   const [verificationError, setVerificationError] = useState<string | null>(null)
+  const [audioToken, setAudioToken] = useState<string | null>(token || null)
+  const [audioEndpoint, setAudioEndpoint] = useState<string>(LIVEKIT_ENDPOINT)
 
   // Audio state
   const [audioState, setAudioState] = useState<AudioState>('disabled')
   const [isMuted, setIsMuted] = useState(false)
   const [room, setRoom] = useState<Room | null>(null)
   const [localTrack, setLocalTrack] = useState<LocalAudioTrack | null>(null)
+
+  // Check if this is a streamer role
+  const isStreamer = role === 'streamer_a' || role === 'streamer_b'
+
+  // Auto-connect for streamers
+  useEffect(() => {
+    if (isStreamer && verificationState === 'idle') {
+      handleConnectWallet()
+    }
+  }, [isStreamer])
+
+  // Auto-enable audio after verification for streamers
+  useEffect(() => {
+    if (isStreamer && verificationState === 'verified' && audioState === 'disabled') {
+      handleEnableAudio()
+    }
+  }, [isStreamer, verificationState, audioState])
 
   // Connect wallet
   const handleConnectWallet = async () => {
@@ -109,9 +128,9 @@ Nonce: ${nonce}`
       // Sign message
       const signature = await signMessage(conn.provider, message)
 
-      // Verify with backend - use audio_ prefix for the room ID
+      // Verify with backend - new room/verify endpoint
       const verifyResponse = await fetch(
-        `${API_BASE_URL}/audio/rooms/audio_${roomId}/verify`,
+        `${API_BASE_URL}/audio/room/verify`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -119,15 +138,18 @@ Nonce: ${nonce}`
             pubkey: conn.pubkey,
             role,
             signature,
-            nonce
+            message
           })
         }
       )
 
       const verifyResult = await verifyResponse.json()
 
-      if (verifyResult.ok && verifyResult.verified) {
+      if (verifyResult.success) {
         setVerificationState('verified')
+        // Store the token and endpoint received from backend
+        setAudioToken(verifyResult.token)
+        setAudioEndpoint(verifyResult.audio_endpoint || LIVEKIT_ENDPOINT)
 
         // Store auth token if returned
         if (verifyResult.token) {
@@ -146,34 +168,17 @@ Nonce: ${nonce}`
 
   // Enable audio
   const handleEnableAudio = async () => {
-    if (!roomId || !role || verificationState !== 'verified') return
+    if (!roomId || !role || verificationState !== 'verified' || !audioToken) return
 
     setAudioState('enabling')
 
     try {
-      // Get publish token from backend
-      const authToken = localStorage.getItem('auth_token')
-      const response = await fetch(
-        `${API_BASE_URL}/audio/rooms/${roomId}/creator-publish-token`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': authToken ? `Bearer ${authToken}` : ''
-          },
-          body: JSON.stringify({ role })
-        }
-      )
-
-      if (!response.ok) {
-        throw new Error('Failed to get publish token')
-      }
-
-      const { publish_token } = await response.json()
+      // Use the token we got from wallet verification
+      // No need to get another token, we already have it from room/verify
 
       // Create and connect to LiveKit room
       const newRoom = createRoom()
-      await connectToRoom(newRoom, LIVEKIT_ENDPOINT, publish_token)
+      await connectToRoom(newRoom, audioEndpoint, audioToken)
 
       // Create and publish audio track
       const audioTrack = await createAudioTrack({
@@ -228,6 +233,31 @@ Nonce: ${nonce}`
     }
   }, [room, localTrack, wallet])
 
+
+  // Simplified UI for streamers - just a small control bar
+  if (isStreamer && audioState === 'enabled') {
+    return (
+      <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20">
+        <div className="bg-[#181821]/95 backdrop-blur-sm rounded-lg px-4 py-2 flex items-center gap-3">
+          <div className="px-2 py-1 bg-red-500 rounded text-white font-semibold animate-pulse text-xs">
+            LIVE
+          </div>
+          <button
+            onClick={handleToggleMute}
+            className={`p-1.5 ${isMuted ? 'bg-red-500/20 text-red-500' : 'bg-[#7DE2A1]/20 text-[#7DE2A1]'} rounded transition-colors`}
+          >
+            {isMuted ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+          </button>
+          <button
+            onClick={handleLeaveRoom}
+            className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs transition-colors"
+          >
+            Leave
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-black/70">

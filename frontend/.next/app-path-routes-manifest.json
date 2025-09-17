@@ -1,0 +1,18 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/favicon.ico/route": "/favicon.ico",
+  "/icon.png/route": "/icon.png",
+  "/accounts/page": "/accounts",
+  "/analytics/page": "/analytics",
+  "/categories/page": "/categories",
+  "/chat/page": "/chat",
+  "/listings/page": "/listings",
+  "/page": "/",
+  "/profile/page": "/profile",
+  "/rooms/page": "/rooms",
+  "/settings/page": "/settings",
+  "/streamer/page": "/streamer",
+  "/system/page": "/system",
+  "/tasks/page": "/tasks",
+  "/test-audio/page": "/test-audio"
+}

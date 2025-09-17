@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { Room, RoomEvent, Track, ConnectionState, LocalParticipant, RemoteParticipant, LogLevel, setLogLevel } from 'livekit-client'
-import { Mic, MicOff, Volume2, VolumeX, PhoneOff, Users, Signal } from 'lucide-react'
+import { Mic, MicOff, Volume2, VolumeX, PhoneOff, Users, Signal, Headphones } from 'lucide-react'
+import { useToast } from '@/components/ui/use-toast'
 
 // Enable detailed logging for debugging
 if (typeof window !== 'undefined') {
@@ -12,7 +13,7 @@ if (typeof window !== 'undefined') {
 interface AudioRoomProps {
   roomId: string
   token: string
-  role: 'streamer' | 'viewer' | 'moderator'
+  role: 'streamer' | 'viewer' | 'moderator' | 'listener'
   livekitUrl?: string
   onDisconnect?: () => void
   onParticipantsChange?: (participants: ParticipantInfo[]) => void
@@ -28,6 +29,7 @@ interface ParticipantInfo {
 
 export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pump-udxzob1q.livekit.cloud', onDisconnect, onParticipantsChange }: AudioRoomProps) {
   console.log('AudioRoom component mounted with:', { roomId, token: token ? 'exists' : 'null', role, livekitUrl })
+  const { toast } = useToast()
   const [room, setRoom] = useState<Room | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
@@ -85,7 +87,8 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
           setIsConnecting(false)
 
           // Request mic permission for streamers and moderators
-          if (role === 'streamer' || role === 'moderator') {
+          if (role === 'streamer' || role === 'moderator' ||
+              role === 'streamer_a' || role === 'streamer_b') {
             requestMicPermission()
           }
         })
@@ -106,6 +109,26 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
 
         newRoom.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
           console.log('Participant connected:', participant.identity)
+
+          // Parse participant metadata
+          let metadata = {}
+          try {
+            metadata = participant.metadata ? JSON.parse(participant.metadata) : {}
+          } catch (e) {
+            console.log('Failed to parse metadata:', participant.metadata)
+          }
+          const participantRole = metadata.role || ''
+
+          // Notify viewers when a streamer joins
+          if ((participantRole === 'streamer' || participantRole.includes('streamer') ||
+               participant.identity?.includes('Streamer')) &&
+              (role === 'viewer' || role === 'listener')) {
+            toast({
+              title: "Streamer joined!",
+              description: `${participant.name || participant.identity} has joined the audio room`,
+            })
+          }
+
           updateParticipants()
         })
 
@@ -134,17 +157,44 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
         console.log('Attempting to connect to LiveKit...')
 
         try {
+          console.log('Attempting connection with:')
+          console.log('- URL:', livekitUrl)
+          console.log('- Token (first 50 chars):', token.substring(0, 50) + '...')
+          console.log('- Token length:', token.length)
+
+          // Parse JWT to see token contents (for debugging)
+          try {
+            const tokenParts = token.split('.')
+            if (tokenParts.length === 3) {
+              const payload = JSON.parse(atob(tokenParts[1]))
+              console.log('Token payload:', payload)
+              console.log('Token room:', payload.video?.room)
+              console.log('Token permissions:', {
+                canPublish: payload.video?.canPublish,
+                canSubscribe: payload.video?.canSubscribe
+              })
+            }
+          } catch (e) {
+            console.error('Failed to parse token:', e)
+          }
+
           await newRoom.connect(livekitUrl, token, {
             autoSubscribe: true,
           })
           console.log('Successfully connected to LiveKit!')
         } catch (connectError) {
           console.error('Connection failed:', connectError)
+          console.error('Connection error details:', {
+            message: connectError.message,
+            code: connectError.code,
+            url: livekitUrl,
+            tokenLength: token?.length
+          })
           throw connectError
         }
 
-        // Initialize audio context for level monitoring
-        if (role === 'streamer' || role === 'moderator') {
+        // Initialize audio context for level monitoring (only for streamers)
+        if (role === 'streamer') {
           initAudioAnalyser(newRoom.localParticipant)
         }
 
@@ -334,6 +384,16 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
 
       {/* Participants */}
       <div className="space-y-2 mb-4">
+        {/* Show waiting message for viewers if no streamers */}
+        {(role === 'viewer' || role === 'listener') && participants.length === 0 && (
+          <div className="p-4 bg-gray-800 rounded-lg text-center">
+            <div className="animate-pulse mb-2">
+              <Users className="w-8 h-8 text-gray-500 mx-auto" />
+            </div>
+            <p className="text-sm text-gray-400">Waiting for streamers to join...</p>
+            <p className="text-xs text-gray-500 mt-1">You'll hear them once they connect</p>
+          </div>
+        )}
         {participants.map((participant) => (
           <div
             key={participant.id}
@@ -376,7 +436,7 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
       </div>
 
       {/* Controls */}
-      {(role === 'streamer' || role === 'moderator') && (
+      {(role === 'streamer' || role === 'moderator' || role === 'streamer_a' || role === 'streamer_b') && (
         <div className="flex items-center justify-center space-x-4 pt-4 border-t border-gray-800">
           <button
             onClick={toggleMute}
@@ -405,23 +465,33 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
         </div>
       )}
 
-      {/* Viewer Controls */}
-      {role === 'viewer' && (
+      {/* Viewer/Listener Controls - NO MIC CONTROLS! */}
+      {(role === 'viewer' || role === 'listener') && (
         <div className="flex items-center justify-center space-x-4 pt-4 border-t border-gray-800">
+          {/* Listening indicator only */}
+          <div className="flex items-center space-x-2 text-gray-400">
+            <Headphones className="w-5 h-5" />
+            <span className="text-sm">Listening Mode</span>
+          </div>
+
+          {/* Deafen button */}
           <button
             onClick={toggleDeafen}
-            className={`p-3 rounded-full transition-colors ${
-              isDeafened ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+            className={`p-2 rounded-lg transition-colors ${
+              isDeafened ? 'bg-red-500/20 text-red-400' : 'bg-gray-700/50 text-gray-400'
             }`}
+            title={isDeafened ? 'Unmute speakers' : 'Mute speakers'}
           >
-            {isDeafened ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+            {isDeafened ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
 
+          {/* Leave button */}
           <button
             onClick={handleDisconnect}
-            className="p-3 bg-gray-700 rounded-full hover:bg-gray-600 transition-colors"
+            className="p-2 bg-gray-700/50 rounded-lg hover:bg-gray-600/50 text-gray-400 transition-colors"
+            title="Leave audio room"
           >
-            <PhoneOff className="w-5 h-5" />
+            <PhoneOff className="w-4 h-4" />
           </button>
         </div>
       )}

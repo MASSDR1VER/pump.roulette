@@ -503,6 +503,24 @@ class AudioRoomService:
         """
         return await self.cleanup_room(pair_id)
 
+    async def get_room_info(self, room_id: str) -> Dict[str, Any]:
+        """
+        Get information about a specific room.
+
+        Args:
+            room_id: Room identifier (can be with or without audio_ prefix)
+
+        Returns:
+            Room information or None if not found
+        """
+        # Handle both formats: "audio_XXXXX" and just "XXXXX"
+        if room_id.startswith("audio_"):
+            pair_id = room_id[6:]  # Remove "audio_" prefix
+        else:
+            pair_id = room_id
+
+        return self.active_rooms.get(pair_id)
+
     async def get_active_rooms(self) -> List[Dict[str, Any]]:
         """
         Get list of all active rooms.

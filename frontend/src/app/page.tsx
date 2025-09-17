@@ -19,7 +19,6 @@ import {
   Shuffle,
   Volume2,
   VolumeX,
-  Phone,
   PhoneOff,
   Mic,
   MicOff,
@@ -29,27 +28,16 @@ import {
   Activity,
   Eye,
   Search,
-  Plus,
   TrendingUp,
-  Zap,
-  Menu,
-  X
+  X,
+  Headphones
 } from 'lucide-react'
 
-interface Message {
-  id: string
-  user_id: string
-  username: string
-  content: string
-  timestamp: string
-  is_system?: boolean
-  room_id?: string
-}
 
 export default function PumpRoulettePage() {
   const { streamPair, loading, error, fetchNewPair } = useStreamPair()
-  const { user, connectWallet, loginAsGuest, logout, isConnecting, error: authError, isWalletConnected } = useAuth()
-  const { viewerToken, subscribeToAudio } = useAudioSubscription()
+  const { user, connectWallet, logout, isConnecting, error: authError, isWalletConnected } = useAuth()
+  const { subscribeToAudio } = useAudioSubscription()
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -65,7 +53,7 @@ export default function PumpRoulettePage() {
   const [micEnabled, setMicEnabled] = useState(false)
   const [audioRoomToken, setAudioRoomToken] = useState<string | null>(null)
   const [audioRoomId, setAudioRoomId] = useState<string | null>(null)
-  const [audioEndpoint, setAudioEndpoint] = useState<string>('wss://localhost:7880')
+  const [audioEndpoint, setAudioEndpoint] = useState<string>('')
   const [userRole, setUserRole] = useState<'streamer' | 'viewer' | 'moderator'>('viewer')
   const [viewerAudioEnabled, setViewerAudioEnabled] = useState(false)
   const [hasActiveAudio, setHasActiveAudio] = useState(false)
@@ -74,7 +62,6 @@ export default function PumpRoulettePage() {
   const [audioParticipants, setAudioParticipants] = useState<{id: string, name: string, role: string}[]>([])
   const [newMessage, setNewMessage] = useState('')
   const [streamMuted, setStreamMuted] = useState({ stream1: true, stream2: true })
-  const [stats, setStats] = useState({ viewers: 0, streams: 0, volume: 0 })
   const [showProfileDropdown, setShowProfileDropdown] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [customRoomId, setCustomRoomId] = useState('')
@@ -110,7 +97,7 @@ export default function PumpRoulettePage() {
     const checkForActiveAudio = async () => {
       if (currentStreamPair?.room_id && !audioEnabled) {
         try {
-          const response = await fetch(`http://localhost:8000/api/v1/audio/stream/${currentStreamPair.room_id}`)
+          const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${currentStreamPair.room_id}`)
           if (response.ok) {
             const data = await response.json()
             if (data.success && data.participants && data.participants.length > 0) {
@@ -137,8 +124,7 @@ export default function PumpRoulettePage() {
     if (audioSummon) {
       toast({
         title: "🔊 Audio Room Created",
-        description: audioSummon.message,
-        duration: 5000
+        description: audioSummon.message
       })
     }
   }, [audioSummon, toast])
@@ -177,9 +163,9 @@ export default function PumpRoulettePage() {
     if (roomParam && mounted) {
       console.log('Room parameter detected:', roomParam)
 
-      // If token is also provided, show wallet verification flow
-      if (tokenParam && roleParam) {
-        console.log('Token and role parameters detected, showing wallet verification')
+      // If role is provided (streamer_a or streamer_b), show wallet verification flow
+      if (roleParam && (roleParam === 'streamer_a' || roleParam === 'streamer_b')) {
+        console.log('Streamer role detected, showing wallet verification')
         setShowTalkView(true)
         setCustomRoomId(roomParam)
 
@@ -213,7 +199,7 @@ export default function PumpRoulettePage() {
       // This is a random pair, create/update the room with full stream data
       const createRoomWithStreams = async () => {
         try {
-          const response = await fetch('http://localhost:8000/api/v1/chat/room/create', {
+          const response = await fetch('https://app.pump-roulette.com/api/v1/chat/room/create', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
@@ -311,7 +297,7 @@ export default function PumpRoulettePage() {
         }
       }
 
-      const response = await fetch(`http://localhost:8000/api/v1/chat/room/${roomId}/info`)
+      const response = await fetch(`https://app.pump-roulette.com/api/v1/chat/room/${roomId}/info`)
       const data = await response.json()
 
       console.log('Room info response:', data)
@@ -382,7 +368,7 @@ export default function PumpRoulettePage() {
         // Room doesn't have stored stream data yet
         // Try to get it from active rooms list
         try {
-          const roomsResponse = await fetch('http://localhost:8000/api/v1/chat/rooms')
+          const roomsResponse = await fetch('https://app.pump-roulette.com/api/v1/chat/rooms')
           const roomsData = await roomsResponse.json()
 
           if (roomsData.success && roomsData.rooms) {
@@ -434,7 +420,7 @@ export default function PumpRoulettePage() {
     if (!currentStreamPair?.room_id) return
 
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/audio/stream/${currentStreamPair.room_id}`)
+      const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${currentStreamPair.room_id}`)
 
       if (response.ok) {
         const data = await response.json()
@@ -476,7 +462,7 @@ export default function PumpRoulettePage() {
 
     try {
       // Get viewer token from backend
-      const response = await fetch(`http://localhost:8000/api/v1/audio/stream/${currentStreamPair.room_id}`)
+      const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${currentStreamPair.room_id}`)
 
       if (response.ok) {
         const data = await response.json()
@@ -558,7 +544,7 @@ export default function PumpRoulettePage() {
 
     try {
       const token = localStorage.getItem('auth_token')
-      const response = await fetch('http://localhost:8000/api/v1/audio/summon', {
+      const response = await fetch('https://app.pump-roulette.com/api/v1/audio/summon', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -575,11 +561,23 @@ export default function PumpRoulettePage() {
 
       if (response.ok) {
         const data = await response.json()
+
+        // Debug logging to see what backend returns
+        console.log("🔍 SUMMON RESPONSE FROM BACKEND:", data)
+        console.log("🔍 audio_endpoint value:", data.audio_endpoint)
+        console.log("🔍 room_token:", data.room_token ? 'exists' : 'missing')
+        console.log("🔍 room_id:", data.room_id)
+
         setAudioEnabled(true)
         setAudioRoomToken(data.room_token)
         setAudioRoomId(data.room_id)
-        setAudioEndpoint(data.audio_endpoint || 'wss://pump-udxzob1q.livekit.cloud')
-        setUserRole('moderator') // The person who summons is moderator
+
+        // Log what we're setting for audioEndpoint
+        const endpoint = data.audio_endpoint || 'wss://pump-udxzob1q.livekit.cloud'
+        console.log("🔍 Setting audioEndpoint to:", endpoint)
+        setAudioEndpoint(endpoint)
+
+        setUserRole('viewer') // The person who summons is a listener/viewer
         setHasActiveAudio(true)
 
         // Log the streamer links for testing
@@ -589,7 +587,7 @@ export default function PumpRoulettePage() {
 
         toast({
           title: "Audio room created",
-          description: "Waiting for streamers to join. Check console for test links.",
+          description: "Listening to room. Waiting for streamers to join.",
         })
       } else {
         throw new Error('Failed to create audio room')
@@ -635,9 +633,6 @@ export default function PumpRoulettePage() {
     }
   }
 
-  const toggleStreamMute = (stream: 'stream1' | 'stream2') => {
-    setStreamMuted(prev => ({ ...prev, [stream]: !prev[stream] }))
-  }
 
   return (
     <div className="h-screen bg-[#15161B] text-white flex flex-col overflow-hidden">
@@ -646,37 +641,51 @@ export default function PumpRoulettePage() {
       <header className="h-14 bg-[#181821] border-b border-[#25262b] flex-shrink-0">
         <div className="h-full px-2 sm:px-4 flex items-center justify-between">
           <div className="flex items-center gap-2 sm:gap-6 flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <img
                 src="/logo.png"
                 alt="Pump Roulette"
-                className="h-5 sm:h-6 w-5 sm:w-6"
+                className="w-7 sm:w-9 h-auto"
               />
-              <div className="text-white font-bold text-base sm:text-xl">
-                Pump.roulette
+              <div className="flex items-center" style={{
+                fontSize: '22px',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+                letterSpacing: '0.5px'
+              }}>
+                <span style={{
+                  fontWeight: 300,
+                  color: '#ffffff'
+                }}>Pump</span>
+                <span style={{
+                  fontWeight: 600,
+                  marginLeft: '2px',
+                  color: '#ffffff'
+                }}>Roulette</span>
               </div>
             </div>
 
             {/* Room Search Bar - Desktop */}
-            <div className="hidden sm:block flex-1 max-w-md">
-              <form onSubmit={handleSearchSubmit} className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Enter Room ID to join (e.g. 3w7h8ZJ5...)"
-                  className="w-full pl-10 pr-20 py-2 bg-[#15161B] border border-[#2E3036] rounded-full text-sm text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors"
-                />
-                {searchQuery.trim() && (
-                  <button
-                    type="submit"
-                    className="absolute right-2 top-1/2 transform -translate-y-1/2 px-2 py-1 bg-white hover:bg-gray-100 text-black rounded-full text-xs font-medium transition-colors"
-                  >
-                    Join
-                  </button>
-                )}
-              </form>
+            <div className="hidden sm:block flex-1 flex justify-center">
+              <div className="w-64">
+                <form onSubmit={handleSearchSubmit} className="relative">
+                  <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Enter Room ID"
+                    className="w-full h-7 pl-8 pr-14 bg-[#15161B] border border-[#2E3036] rounded-sm text-xs text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors"
+                  />
+                  {searchQuery.trim() && (
+                    <button
+                      type="submit"
+                      className="absolute right-1 top-1/2 transform -translate-y-1/2 px-2 h-5 bg-white hover:bg-gray-100 text-black rounded-sm text-xs font-medium transition-colors flex items-center"
+                    >
+                      Join
+                    </button>
+                  )}
+                </form>
+              </div>
             </div>
 
             {/* Mobile Search Button */}
@@ -690,55 +699,41 @@ export default function PumpRoulettePage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            <button
-              onClick={() => router.push('/rooms')}
-              className="px-2 sm:px-3 py-1 bg-[#25262b] hover:bg-[#2a2b30] text-white rounded-sm text-xs font-medium transition-colors flex items-center gap-1"
-            >
-              <Users className="h-3 w-3" />
-              <span className="hidden sm:inline">View Rooms</span>
-            </button>
-
-            <div className="hidden sm:flex items-center gap-2">
-              <span className="text-xs text-gray-500">
-                Room: <span className="text-white font-mono">{roomId.slice(0, 8)}</span>
-              </span>
-              {customRoomId && (
-                <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded">
-                  Custom
-                </span>
-              )}
-            </div>
-
             {customRoomId ? (
               <button
                 onClick={handleBackToRandomRoom}
-                className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-sm text-xs sm:text-sm flex items-center gap-1 sm:gap-2 transition-all"
+                className="h-7 px-3 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-sm text-xs flex items-center justify-center gap-1.5 transition-all min-w-[90px]"
               >
-                <Shuffle className="h-3 sm:h-4 w-3 sm:w-4" />
-                <span className="hidden sm:inline">Back to Random</span>
-                <span className="sm:hidden">Back</span>
+                <Shuffle className="h-3.5 w-3.5" />
+                <span>Back to Random</span>
               </button>
             ) : (
               <button
                 onClick={handleNextPair}
                 disabled={loading}
-                className="px-2 sm:px-3 py-1 sm:py-1.5 bg-[#83EFAA] hover:bg-[#73df9a] disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold rounded-sm text-xs sm:text-sm flex items-center gap-1 sm:gap-2 transition-all"
+                className="h-7 px-3 bg-[#83EFAA] hover:bg-[#73df9a] disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold rounded-sm text-xs flex items-center justify-center gap-1.5 transition-all min-w-[90px]"
               >
               {loading ? (
                 <>
-                  <Loader2 className="h-3 sm:h-4 w-3 sm:w-4 animate-spin" />
-                  <span className="hidden sm:inline">Finding...</span>
-                  <span className="sm:hidden">...</span>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Finding...</span>
                 </>
               ) : (
                 <>
-                  <Shuffle className="h-3 sm:h-4 w-3 sm:w-4" />
-                  <span className="hidden sm:inline">Next Pair</span>
-                  <span className="sm:hidden">Next</span>
+                  <Shuffle className="h-3.5 w-3.5" />
+                  <span>Next Pair</span>
                 </>
               )}
             </button>
             )}
+
+            <button
+              onClick={() => router.push('/rooms')}
+              className="h-7 px-3 bg-[#25262b] hover:bg-[#2a2b30] text-white rounded-sm text-xs font-medium transition-colors flex items-center justify-center gap-1.5 min-w-[90px]"
+            >
+              <Users className="h-3.5 w-3.5" />
+              <span>View Rooms</span>
+            </button>
 
             <div className="relative">
               <button
@@ -747,12 +742,12 @@ export default function PumpRoulettePage() {
                   handleProfileClick()
                 }}
                 disabled={isConnecting}
-                className="px-1.5 sm:px-2 py-1 bg-[#25262b] hover:bg-[#2a2b30] disabled:opacity-50 text-white border border-[#2a2b30] rounded-sm text-xs font-medium transition-all flex items-center gap-1"
+                className="h-7 px-3 bg-[#25262b] hover:bg-[#2a2b30] disabled:opacity-50 text-white border border-[#2a2b30] rounded-sm text-xs font-medium transition-all flex items-center justify-center gap-1.5 min-w-[90px]"
               >
                 {isConnecting ? (
                   <>
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    <span className="hidden sm:inline">...</span>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>...</span>
                   </>
                 ) : user && isWalletConnected ? (
                   <>
@@ -761,16 +756,16 @@ export default function PumpRoulettePage() {
                       alt={user.display_name}
                       className="w-4 h-4 rounded-full"
                     />
-                    <span className="hidden lg:inline text-xs">{(user.display_name || user.username || '').slice(0, 8)}</span>
+                    <span className="text-xs truncate max-w-[60px]">{(user.display_name || user.username || '').slice(0, 8)}</span>
                     {user.is_verified && (
-                      <span className="hidden sm:block w-1.5 h-1.5 bg-white rounded-full"></span>
+                      <span className="w-1.5 h-1.5 bg-white rounded-full"></span>
                     )}
-                    <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-3 h-3 text-gray-400 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </>
                 ) : (
-                  'login'
+                  'Login'
                 )}
               </button>
 
@@ -864,12 +859,12 @@ export default function PumpRoulettePage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Enter Room ID to join"
-              className="w-full pl-10 pr-16 py-2 bg-[#15161B] border border-[#2E3036] rounded-full text-sm text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors"
+              className="w-full h-8 pl-9 pr-16 bg-[#15161B] border border-[#2E3036] rounded-sm text-sm text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors"
             />
             {searchQuery.trim() && (
               <button
                 type="submit"
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 px-2 py-1 bg-[#7DE2A1] hover:bg-[#6dd291] text-black rounded text-xs font-medium transition-colors"
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 px-2 py-1 bg-[#7DE2A1] hover:bg-[#6dd291] text-black rounded-sm text-xs font-medium transition-colors"
               >
                 Join
               </button>
@@ -885,6 +880,45 @@ export default function PumpRoulettePage() {
           {/* Control Bar */}
           <div className="border-b border-[#25262b] px-2 sm:px-4 py-2 flex flex-col sm:flex-row items-start sm:items-center justify-between bg-[#181821] gap-2">
             <div className="flex items-center gap-3">
+              {/* Show audio controls for streamers who have joined */}
+              {userRole === 'streamer' && audioEnabled && (
+                <div className="flex items-center gap-2">
+                  <div className="px-2 py-1 bg-red-500 rounded text-white font-semibold animate-pulse text-xs">
+                    LIVE
+                  </div>
+                  <button
+                    onClick={() => setMicEnabled(!micEnabled)}
+                    className={`p-1.5 ${!micEnabled ? 'bg-red-500/20 text-red-500' : 'bg-[#7DE2A1]/20 text-[#7DE2A1]'} rounded transition-colors`}
+                  >
+                    {!micEnabled ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setAudioEnabled(false)
+                      window.location.href = '/'
+                    }}
+                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs transition-colors"
+                  >
+                    Leave
+                  </button>
+                </div>
+              )}
+              {/* Show audio status for summon creator (listener) */}
+              {userRole === 'viewer' && audioEnabled && !tokenParam && (
+                <div className="flex items-center gap-2">
+                  {audioParticipants.length > 0 ? (
+                    <>
+                      <div className="flex items-center gap-1.5 text-gray-400">
+                        <Headphones className="w-4 h-4" />
+                        <span className="text-xs">Listening</span>
+                      </div>
+                      <span className="text-xs text-green-400">{audioParticipants.length} streamer{audioParticipants.length > 1 ? 's' : ''} active</span>
+                    </>
+                  ) : (
+                    <span className="text-xs text-gray-500">Waiting for streamers to join...</span>
+                  )}
+                </div>
+              )}
               {/* Show Join Voice button if user is a streamer and has been summoned */}
               {streamerJoinPending && !audioEnabled && (
                 <button
@@ -896,54 +930,38 @@ export default function PumpRoulettePage() {
                 </button>
               )}
 
-              {/* Regular Summon/End Call button - hide for streamers joining via URL and when TalkView is showing */}
-              {!streamerJoinPending && !hasActiveAudio && userRole !== 'streamer' && !showTalkView && (
+              {/* Regular Summon/End Call button - only show for non-streamers when not in audio */}
+              {!tokenParam && !audioEnabled && (
                 <button
-                  onClick={() => audioEnabled ? setAudioEnabled(false) : handleSummonStreamers()}
-                  disabled={!isWalletConnected && !audioEnabled}
+                  onClick={handleSummonStreamers}
+                  disabled={!isWalletConnected}
                   className={`px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 ${
-                    audioEnabled
-                      ? 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30'
-                      : !isWalletConnected
+                    !isWalletConnected
                       ? 'bg-[#25262b] text-gray-600 border border-[#2a2b30] cursor-not-allowed opacity-50'
                       : 'bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]'
                   }`}
-                  title={!isWalletConnected && !audioEnabled ? 'Connect wallet to create audio rooms' : ''}
+                  title={!isWalletConnected ? 'Connect wallet to create audio rooms' : ''}
                 >
-                  {audioEnabled ? (
-                    <>
-                      <PhoneOff className="h-4 w-4" />
-                      <span className="hidden sm:inline">End Call</span>
-                    </>
-                  ) : (
-                    <>
-                      <Phone className="h-4 w-4" />
-                      <span className="hidden sm:inline">Summon</span>
-                    </>
-                  )}
+                  <Mic className="h-4 w-4" />
+                  <span className="hidden sm:inline">Summon Streamers</span>
+                  <span className="sm:hidden">Summon</span>
+                </button>
+              )}
+              {/* End Call button for summon creator */}
+              {userRole === 'viewer' && audioEnabled && !tokenParam && (
+                <button
+                  onClick={() => {
+                    setAudioEnabled(false)
+                    setAudioRoomToken(null)
+                    setAudioRoomId(null)
+                  }}
+                  className="px-2 py-0.5 rounded-sm text-xs font-medium transition-all flex items-center gap-1 bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]"
+                >
+                  <PhoneOff className="h-3.5 w-3.5" />
+                  <span className="text-[11px]">End Call</span>
                 </button>
               )}
 
-              {/* Audio Status Indicator */}
-              {/* Only show status indicator for moderators/viewers, not for streamers joining via URL */}
-              {hasActiveAudio && userRole !== 'streamer' && (
-                <div className="px-2 py-1 rounded-sm text-xs font-medium flex items-center gap-2" style={{
-                  backgroundColor: 'rgba(131, 239, 170, 0.1)',
-                  border: '1px solid rgba(131, 239, 170, 0.3)'
-                }}>
-                  <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: '#83EFAA' }} />
-                  <span style={{ color: '#83EFAA' }}>
-                    {audioParticipants.length > 0 ? (
-                      <>
-                        {audioParticipants.map(p => p.name).join(', ')} in audio
-                        {audioParticipants.length === 1 && ' (waiting for other streamer)'}
-                      </>
-                    ) : (
-                      'Waiting for streamers to join...'
-                    )}
-                  </span>
-                </div>
-              )}
               {/* Listen button for viewers when audio is active */}
               {hasActiveAudio && !audioEnabled && !viewerAudioEnabled && !streamerJoinPending && userRole !== 'streamer' && (
                 <button
@@ -966,28 +984,6 @@ export default function PumpRoulettePage() {
                 </button>
               )}
 
-              {audioEnabled && isWalletConnected && (
-                <button
-                  onClick={() => setMicEnabled(!micEnabled)}
-                  className={`px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 ${
-                    micEnabled
-                      ? 'bg-white/20 text-white border border-white/30 hover:bg-white/30'
-                      : 'bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]'
-                  }`}
-                >
-                  {micEnabled ? (
-                    <>
-                      <Mic className="h-4 w-4" />
-                      <span className="hidden sm:inline">Muted</span>
-                    </>
-                  ) : (
-                    <>
-                      <MicOff className="h-4 w-4" />
-                      <span className="hidden sm:inline">Mic Off</span>
-                    </>
-                  )}
-                </button>
-              )}
 
               {/* Show listen button for viewers when there's active audio */}
               {hasActiveAudio && !audioEnabled && !viewerAudioEnabled && (
@@ -1067,67 +1063,63 @@ export default function PumpRoulettePage() {
                   <p className="text-gray-400">Loading room streams...</p>
                 </div>
               </div>
-            ) : currentStreamPair ? (
+            ) : currentStreamPair || (tokenParam && roleParam) ? (
               <div className="flex-1 flex flex-col">
                 {/* Stream 1 */}
                 <div className="flex-1 flex border-b border-[#25262b] relative">
-                  <LiveKitStream
-                    stream={currentStreamPair.stream_1}
-                    streamId="stream1"
-                    muted={streamMuted.stream1}
-                    onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream1: muted }))}
-                  />
-                  {/* Show TalkView overlay for streamer_a */}
-                  {showTalkView && roleParam === 'streamer_a' && roomParam && tokenParam && (
-                    <div className="absolute inset-0 z-10">
-                      <TalkView
-                        roomId={roomParam}
-                        token={tokenParam}
-                        role={roleParam}
-                        onClose={() => {
-                          setShowTalkView(false)
-                          // After verification, set up audio
-                          if (tokenParam && roleParam) {
-                            setAudioRoomToken(tokenParam)
-                            setAudioRoomId(`audio_${roomParam}`)
-                            setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
-                            setUserRole('streamer')
-                            setAudioEnabled(true)
-                          }
-                        }}
-                      />
+                  {currentStreamPair?.stream_1 ? (
+                    <LiveKitStream
+                      stream={currentStreamPair.stream_1}
+                      streamId="stream1"
+                      muted={streamMuted.stream1}
+                      onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream1: muted }))}
+                    />
+                  ) : (
+                    <div className="flex-1 bg-[#181821] flex items-center justify-center">
+                      <p className="text-gray-500 text-sm">Waiting for stream...</p>
                     </div>
+                  )}
+
+                  {/* TalkView overlay for streamer_a */}
+                  {showTalkView && roleParam === 'streamer_a' && (
+                    <TalkView
+                      roomId={roomParam || ''}
+                      role="streamer_a"
+                      onClose={() => {
+                        setShowTalkView(false)
+                        // Clear URL params
+                        router.push('/')
+                      }}
+                    />
                   )}
                 </div>
 
                 {/* Stream 2 */}
                 <div className="flex-1 flex relative">
-                  <LiveKitStream
-                    stream={currentStreamPair.stream_2}
-                    streamId="stream2"
-                    muted={streamMuted.stream2}
-                    onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream2: muted }))}
-                  />
-                  {/* Show TalkView overlay for streamer_b */}
-                  {showTalkView && roleParam === 'streamer_b' && roomParam && tokenParam && (
-                    <div className="absolute inset-0 z-10">
-                      <TalkView
-                        roomId={roomParam}
-                        token={tokenParam}
-                        role={roleParam}
-                        onClose={() => {
-                          setShowTalkView(false)
-                          // After verification, set up audio
-                          if (tokenParam && roleParam) {
-                            setAudioRoomToken(tokenParam)
-                            setAudioRoomId(`audio_${roomParam}`)
-                            setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
-                            setUserRole('streamer')
-                            setAudioEnabled(true)
-                          }
-                        }}
-                      />
+                  {currentStreamPair?.stream_2 ? (
+                    <LiveKitStream
+                      stream={currentStreamPair.stream_2}
+                      streamId="stream2"
+                      muted={streamMuted.stream2}
+                      onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream2: muted }))}
+                    />
+                  ) : (
+                    <div className="flex-1 bg-[#181821] flex items-center justify-center">
+                      <p className="text-gray-500 text-sm">Waiting for stream...</p>
                     </div>
+                  )}
+
+                  {/* TalkView overlay for streamer_b */}
+                  {showTalkView && roleParam === 'streamer_b' && (
+                    <TalkView
+                      roomId={roomParam || ''}
+                      role="streamer_b"
+                      onClose={() => {
+                        setShowTalkView(false)
+                        // Clear URL params
+                        router.push('/')
+                      }}
+                    />
                   )}
                 </div>
               </div>
@@ -1148,8 +1140,17 @@ export default function PumpRoulettePage() {
           </div>
 
           {/* Audio Room */}
-          {(audioEnabled || viewerAudioEnabled) && audioRoomToken && audioRoomId && (
+          {audioEnabled && audioRoomToken && audioRoomId && audioEndpoint && (
             <div className="border-b border-[#25262b]">
+              {(() => {
+                console.log("🎯 RENDERING AUDIOROOM WITH:", {
+                  roomId: audioRoomId,
+                  token: audioRoomToken ? 'exists' : 'missing',
+                  role: userRole,
+                  livekitUrl: audioEndpoint
+                })
+                return null
+              })()}
               <AudioRoom
                 roomId={audioRoomId}
                 token={audioRoomToken}
@@ -1283,7 +1284,7 @@ export default function PumpRoulettePage() {
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="flex items-center gap-2">
                     <img
-                      src={user?.profile_image}
+                      src="https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=93&img-dpr=2&img-onerror=redirect"
                       alt={user?.display_name}
                       className="w-6 h-6 rounded-full"
                     />
@@ -1371,6 +1372,16 @@ export default function PumpRoulettePage() {
       <footer className="h-10 bg-[#181821] border-t border-[#25262b] flex-shrink-0">
         <div className="h-full px-2 sm:px-4 flex items-center justify-between overflow-x-auto">
           <div className="flex items-center gap-3 sm:gap-6 text-xs flex-shrink-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-400">
+                Room: <span className="text-white font-mono">{roomId.slice(0, 8)}</span>
+                {customRoomId && (
+                  <span className="ml-1 bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded text-[10px]">
+                    Custom
+                  </span>
+                )}
+              </span>
+            </div>
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
               <span className="text-gray-400">

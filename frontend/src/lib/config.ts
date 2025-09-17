@@ -5,11 +5,11 @@
 
 export const config = {
   api: {
-    baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000',
+    baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || 'https://app.pump-roulette.com',
     timeout: parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '30000'),
   },
   websocket: {
-    url: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws',
+    url: process.env.NEXT_PUBLIC_WS_URL || 'wss://app.pump-roulette.com/api/v1/chat/ws',
   },
   app: {
     name: process.env.NEXT_PUBLIC_APP_NAME || 'Pump Roulette',

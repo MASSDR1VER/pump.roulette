@@ -20,7 +20,7 @@ export interface StreamPair {
   stream_2: Stream
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com/api/v1'
 
 export function useStreamPair() {
   const [streamPair, setStreamPair] = useState<StreamPair | null>(null)

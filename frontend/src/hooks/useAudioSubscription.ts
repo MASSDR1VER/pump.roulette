@@ -22,7 +22,7 @@ export function useAudioSubscription(): AudioSubscriptionHook {
     setError(null)
 
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/audio/stream/${pairId}`)
+      const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${pairId}`)
 
       if (response.ok) {
         const data = await response.json()

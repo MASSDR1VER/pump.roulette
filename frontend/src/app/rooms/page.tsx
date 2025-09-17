@@ -32,7 +32,7 @@ export default function RoomsPage() {
 
   const fetchActiveRooms = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/v1/chat/rooms')
+      const response = await fetch('https://app.pump-roulette.com/api/v1/chat/rooms')
       const data = await response.json()
 
       if (data.success) {

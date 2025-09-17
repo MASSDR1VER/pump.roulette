@@ -52,6 +52,18 @@ export function useWebSocket(roomId: string, streamPair?: any) {
   const maxReconnectAttempts = 5
   const isConnecting = useRef(false)
 
+  // Use refs for values that change frequently to avoid recreating the function
+  const userRef = useRef(user)
+  const isWalletConnectedRef = useRef(isWalletConnected)
+  const streamPairRef = useRef(streamPair)
+
+  // Update refs when values change
+  useEffect(() => {
+    userRef.current = user
+    isWalletConnectedRef.current = isWalletConnected
+    streamPairRef.current = streamPair
+  }, [user, isWalletConnected, streamPair])
+
   const connect = useCallback(() => {
     if (!roomId || isConnecting.current) return
 
@@ -60,36 +72,43 @@ export function useWebSocket(roomId: string, streamPair?: any) {
 
     try {
       // Build WebSocket URL with query parameters
-      const wsUrl = new URL(`ws://localhost:8000/api/v1/chat/ws/${roomId}`)
+      const wsUrl = new URL(`wss://app.pump-roulette.com/api/v1/chat/ws/${roomId}`)
 
-      if (user && isWalletConnected && user.wallet_address) {
-        wsUrl.searchParams.set('user_id', user.wallet_address)
-        wsUrl.searchParams.set('username', user.display_name || user.username || user.wallet_address.slice(0, 8))
-        wsUrl.searchParams.set('profile_image', user.profile_image || `https://ui-avatars.com/api/?name=${user.display_name}&background=666&color=fff&size=64&rounded=true`)
-        console.log('Connecting as authenticated user:', user.display_name || user.username)
+      // Use refs to get current values
+      const currentUser = userRef.current
+      const currentIsWalletConnected = isWalletConnectedRef.current
+      const currentStreamPair = streamPairRef.current
+
+      console.log('WebSocket connect - user:', currentUser, 'isWalletConnected:', currentIsWalletConnected)
+
+      if (currentUser && currentIsWalletConnected && currentUser.wallet_address && !currentUser.wallet_address.startsWith('guest_')) {
+        wsUrl.searchParams.set('user_id', currentUser.wallet_address)
+        wsUrl.searchParams.set('username', currentUser.display_name || currentUser.username || currentUser.wallet_address.slice(0, 8))
+        wsUrl.searchParams.set('profile_image', 'https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=93&img-dpr=2&img-onerror=redirect')
+        console.log('Connecting as authenticated user:', currentUser.display_name || currentUser.username, 'with wallet:', currentUser.wallet_address)
       } else {
         // Guest user
         const guestName = `Guest_${Date.now().toString().slice(-6)}`
         wsUrl.searchParams.set('username', guestName)
-        wsUrl.searchParams.set('profile_image', `https://ui-avatars.com/api/?name=${guestName}&background=666&color=fff&size=64&rounded=true`)
-        console.log('Connecting as guest:', guestName)
+        wsUrl.searchParams.set('profile_image', 'https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=93&img-dpr=2&img-onerror=redirect')
+        console.log('Connecting as guest:', guestName, '- user:', currentUser, 'isWalletConnected:', currentIsWalletConnected)
       }
 
       // Add stream pair information if available
       // We send token addresses for identification, but full data should be managed server-side
-      if (streamPair && streamPair.stream_1 && streamPair.stream_2) {
-        if (streamPair.stream_1?.token_address) {
-          wsUrl.searchParams.set('stream_1', streamPair.stream_1.token_address)
+      if (currentStreamPair && currentStreamPair.stream_1 && currentStreamPair.stream_2) {
+        if (currentStreamPair.stream_1?.token_address) {
+          wsUrl.searchParams.set('stream_1', currentStreamPair.stream_1.token_address)
         }
-        if (streamPair.stream_2?.token_address) {
-          wsUrl.searchParams.set('stream_2', streamPair.stream_2.token_address)
+        if (currentStreamPair.stream_2?.token_address) {
+          wsUrl.searchParams.set('stream_2', currentStreamPair.stream_2.token_address)
         }
         // Store full stream data in localStorage for this room
         if (typeof window !== 'undefined') {
           const roomStreamData = {
             room_id: roomId,
-            stream_1: streamPair.stream_1,
-            stream_2: streamPair.stream_2,
+            stream_1: currentStreamPair.stream_1,
+            stream_2: currentStreamPair.stream_2,
             timestamp: new Date().toISOString()
           }
           localStorage.setItem(`room_streams_${roomId}`, JSON.stringify(roomStreamData))
@@ -200,7 +219,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       setError('Failed to connect')
       isConnecting.current = false
     }
-  }, [roomId, user, isWalletConnected])
+  }, [roomId])
 
   const disconnect = useCallback(() => {
     isConnecting.current = false
@@ -247,28 +266,67 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     }
   }, [socket])
 
+  // Track previous user state to detect authentication changes
+  const prevUserRef = useRef<string | undefined>()
+  const connectTimeoutRef = useRef<NodeJS.Timeout>()
+  const hasInitializedRef = useRef(false)
+
   // Connect when hook is initialized or dependencies change
   useEffect(() => {
-    if (roomId && roomId !== 'default') {
-      // Disconnect first if already connected (to reconnect with new user info)
+    if (!roomId || roomId === 'default') {
+      return
+    }
+
+    const currentUserId = user?.wallet_address
+    const prevUserId = prevUserRef.current
+
+    console.log('WebSocket useEffect triggered - roomId:', roomId, 'currentUser:', currentUserId, 'prevUser:', prevUserId, 'connected:', isConnected)
+
+    // Check if user authentication has changed
+    const userChanged = prevUserId !== undefined && currentUserId !== prevUserId
+
+    if (userChanged) {
+      console.log('User authentication changed, will reconnect WebSocket')
+      prevUserRef.current = currentUserId
+
+      // Disconnect existing socket if any
       if (socket) {
-        disconnect()
+        console.log('Disconnecting existing socket to reconnect with new user info')
+        socket.close(1000, 'User authentication changed')
+        setSocket(null)
+        setIsConnected(false)
+      }
+    }
+
+    // Only connect if we don't have an active connection
+    if (!isConnected && !isConnecting.current) {
+      // Clear any existing timeout
+      if (connectTimeoutRef.current) {
+        clearTimeout(connectTimeoutRef.current)
       }
 
-      // Only connect if we have a valid room ID
-      const timer = setTimeout(() => {
-        connect()
-      }, 100) // Small delay to ensure everything is ready
+      // Connect after a small delay
+      connectTimeoutRef.current = setTimeout(() => {
+        if (!isConnected && !isConnecting.current) {
+          console.log('Connecting WebSocket with user:', currentUserId || 'guest')
+          connect()
+        }
+      }, hasInitializedRef.current ? 500 : 100) // Longer delay for reconnects
 
-      return () => {
-        clearTimeout(timer)
-        disconnect()
-      }
+      hasInitializedRef.current = true
+    }
+
+    // Update the prev user ref
+    if (prevUserId === undefined) {
+      prevUserRef.current = currentUserId
     }
 
     return () => {
-      disconnect()
+      if (connectTimeoutRef.current) {
+        clearTimeout(connectTimeoutRef.current)
+      }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, user?.wallet_address, isWalletConnected])
 
   // Cleanup on unmount
