@@ -1197,6 +1197,11 @@ export default function PumpRoulettePage() {
                         setMicEnabled(true)
                         console.log('🎤 States set:', { audioEnabled: enabled, userRole: 'streamer', micEnabled: true })
                       }}
+                      isMuted={!micEnabled}
+                      onMuteChange={(muted) => {
+                        console.log('🎤 TalkView (streamer_a) mute changed:', muted)
+                        setMicEnabled(!muted)
+                      }}
                     />
                   )}
                 </div>
@@ -1235,6 +1240,11 @@ export default function PumpRoulettePage() {
                         setUserRole('streamer')
                         setMicEnabled(true)
                         console.log('🎤 States set:', { audioEnabled: enabled, userRole: 'streamer', micEnabled: true })
+                      }}
+                      isMuted={!micEnabled}
+                      onMuteChange={(muted) => {
+                        console.log('🎤 TalkView (streamer_b) mute changed:', muted)
+                        setMicEnabled(!muted)
                       }}
                     />
                   )}

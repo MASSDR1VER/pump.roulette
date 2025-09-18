@@ -46,12 +46,14 @@ interface TalkViewProps {
   role: string
   onClose: () => void
   onAudioEnabled?: (enabled: boolean, token: string, roomId: string, endpoint: string) => void
+  isMuted?: boolean
+  onMuteChange?: (muted: boolean) => void
 }
 
 type VerificationState = 'idle' | 'connecting' | 'verifying' | 'verified' | 'error'
 type AudioState = 'disabled' | 'enabling' | 'enabled' | 'error'
 
-export function TalkView({ roomId, token, role, onClose, onAudioEnabled }: TalkViewProps) {
+export function TalkView({ roomId, token, role, onClose, onAudioEnabled, isMuted: parentMuted, onMuteChange }: TalkViewProps) {
   // Wallet state
   const [wallet, setWallet] = useState<WalletConnection | null>(null)
   const [verificationState, setVerificationState] = useState<VerificationState>('idle')
@@ -61,9 +63,19 @@ export function TalkView({ roomId, token, role, onClose, onAudioEnabled }: TalkV
 
   // Audio state
   const [audioState, setAudioState] = useState<AudioState>('disabled')
-  const [isMuted, setIsMuted] = useState(false)
+  const [isMuted, setIsMuted] = useState(parentMuted ?? false)
   const [room, setRoom] = useState<Room | null>(null)
   const [localTrack, setLocalTrack] = useState<LocalAudioTrack | null>(null)
+
+  // Sync with parent mute state
+  useEffect(() => {
+    if (parentMuted !== undefined && parentMuted !== isMuted) {
+      setIsMuted(parentMuted)
+      if (localTrack) {
+        setTrackMuted(localTrack, parentMuted)
+      }
+    }
+  }, [parentMuted])
 
   // Check if this is a streamer role
   const isStreamer = role === 'streamer_a' || role === 'streamer_b'
@@ -209,8 +221,13 @@ export function TalkView({ roomId, token, role, onClose, onAudioEnabled }: TalkV
   // Toggle mute
   const handleToggleMute = () => {
     if (localTrack) {
-      setTrackMuted(localTrack, !isMuted)
-      setIsMuted(!isMuted)
+      const newMutedState = !isMuted
+      setTrackMuted(localTrack, newMutedState)
+      setIsMuted(newMutedState)
+      // Notify parent component
+      if (onMuteChange) {
+        onMuteChange(newMutedState)
+      }
     }
   }
 

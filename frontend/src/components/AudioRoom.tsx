@@ -228,6 +228,13 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
               participantRole: participantMetadata.role
             })
 
+            // Check if audio element already exists for this track
+            const existingElement = document.querySelector(`[data-track-sid="${track.sid}"]`)
+            if (existingElement) {
+              console.log('⚠️ Audio element already exists for track:', track.sid, 'removing old one')
+              existingElement.remove()
+            }
+
             // Simply attach the audio element like the test HTML does
             const audioElement = track.attach()
             audioElement.style.display = 'none'
@@ -661,6 +668,12 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
     )
   }
 
+  // For viewers, don't render any UI - just handle the connection
+  if (role === 'viewer' || role === 'listener') {
+    return null
+  }
+
+  // Only render UI for streamers
   return (
     <div className="bg-gray-900 rounded-lg p-4">
       {/* Connection Status */}
@@ -760,36 +773,6 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
         </div>
       )}
 
-      {/* Viewer/Listener Controls - NO MIC CONTROLS! */}
-      {(role === 'viewer' || role === 'listener') && (
-        <div className="flex items-center justify-center space-x-4 pt-4 border-t border-gray-800">
-          {/* Listening indicator only */}
-          <div className="flex items-center space-x-2 text-gray-400">
-            <Headphones className="w-5 h-5" />
-            <span className="text-sm">Listening Mode</span>
-          </div>
-
-          {/* Deafen button */}
-          <button
-            onClick={toggleDeafen}
-            className={`p-2 rounded-lg transition-colors ${
-              isDeafened ? 'bg-red-500/20 text-red-400' : 'bg-gray-700/50 text-gray-400'
-            }`}
-            title={isDeafened ? 'Unmute speakers' : 'Mute speakers'}
-          >
-            {isDeafened ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-          </button>
-
-          {/* Leave button */}
-          <button
-            onClick={handleDisconnect}
-            className="p-2 bg-gray-700/50 rounded-lg hover:bg-gray-600/50 text-gray-400 transition-colors"
-            title="Leave audio room"
-          >
-            <PhoneOff className="w-4 h-4" />
-          </button>
-        </div>
-      )}
 
       {/* Audio Level Indicator for Streamer */}
       {(role === 'streamer' || role === 'moderator') && !isMuted && (

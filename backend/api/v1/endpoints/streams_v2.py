@@ -78,6 +78,44 @@ async def get_random_stream_pair(
         raise HTTPException(status_code=500, detail=f"Failed to get random pair: {str(e)}")
 
 
+from pydantic import BaseModel
+
+class CustomPairRequest(BaseModel):
+    token1: str
+    token2: str
+
+@router.post("/custom-pair")
+async def get_custom_stream_pair(
+    request: CustomPairRequest,
+    stream_manager: StreamManager = Depends(get_stream_manager)
+) -> Dict[str, Any]:
+    """
+    Get a custom pair of Pump.fun token streams by their mint addresses.
+
+    Args:
+        request (CustomPairRequest): Request containing token1 and token2 mint addresses
+        stream_manager (StreamManager): The stream manager service
+
+    Returns:
+        Dict[str, Any]: A pair of specified streams with room ID
+    """
+    try:
+        pair = await stream_manager.get_custom_pair(request.token1, request.token2)
+
+        if not pair:
+            raise HTTPException(
+                status_code=404,
+                detail="One or both tokens not found. Please ensure the token addresses are valid."
+            )
+
+        return pair
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get custom pair: {str(e)}")
+
+
 @router.get("/verify/{mint}")
 async def verify_stream_is_live(
     mint: str,
