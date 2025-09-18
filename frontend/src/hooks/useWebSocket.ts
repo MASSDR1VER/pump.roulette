@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from './useAuth'
+import { config } from '@/lib/config'
 
 export interface ChatMessage {
   id: string
@@ -18,8 +19,8 @@ export interface ChatMessage {
 }
 
 interface WebSocketMessage {
-  type: 'message' | 'system' | 'connection' | 'history' | 'error' | 'pong' | 'audio_summon' | 'audio_join_request'
-  data?: ChatMessage | ChatMessage[] | AudioSummonData | AudioJoinRequest
+  type: 'message' | 'system' | 'connection' | 'history' | 'error' | 'pong' | 'audio_summon' | 'audio_join_request' | 'streamer_ready'
+  data?: ChatMessage | ChatMessage[] | AudioSummonData | AudioJoinRequest | StreamerReadyData
   message?: string
   status?: string
   room_id?: string
@@ -38,6 +39,14 @@ interface AudioJoinRequest {
   message: string
 }
 
+interface StreamerReadyData {
+  room_id: string
+  streamer_joined: string
+  viewer_token: string
+  audio_endpoint: string
+  message: string
+}
+
 export function useWebSocket(roomId: string, streamPair?: any) {
   const { user, isWalletConnected } = useAuth()
   const [socket, setSocket] = useState<WebSocket | null>(null)
@@ -47,6 +56,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
   const [error, setError] = useState<string | null>(null)
   const [audioSummon, setAudioSummon] = useState<AudioSummonData | null>(null)
   const [audioJoinRequest, setAudioJoinRequest] = useState<AudioJoinRequest | null>(null)
+  const [streamerReady, setStreamerReady] = useState<StreamerReadyData | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
   const reconnectAttempts = useRef(0)
   const maxReconnectAttempts = 5
@@ -72,7 +82,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
 
     try {
       // Build WebSocket URL with query parameters
-      const wsUrl = new URL(`wss://app.pump-roulette.com/api/v1/chat/ws/${roomId}`)
+      const wsUrl = new URL(`${config.websocket.url}/${roomId}`)
 
       // Use refs to get current values
       const currentUser = userRef.current
@@ -175,6 +185,13 @@ export function useWebSocket(roomId: string, streamPair?: any) {
               if (data.data) {
                 console.log('Received audio join request:', data.data)
                 setAudioJoinRequest(data.data as AudioJoinRequest)
+              }
+              break
+
+            case 'streamer_ready':
+              if (data.data) {
+                console.log('Received streamer ready notification:', data.data)
+                setStreamerReady(data.data as StreamerReadyData)
               }
               break
 
@@ -357,6 +374,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     error,
     audioSummon,
     audioJoinRequest,
+    streamerReady,
     sendMessage,
     connect,
     disconnect,

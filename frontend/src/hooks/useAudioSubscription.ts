@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { config } from '@/lib/config'
 
 interface AudioSubscriptionHook {
   viewerToken: string | null
@@ -22,7 +23,7 @@ export function useAudioSubscription(): AudioSubscriptionHook {
     setError(null)
 
     try {
-      const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${pairId}`)
+      const response = await fetch(`${config.api.baseUrl}/api/v1/audio/stream/${pairId}`)
 
       if (response.ok) {
         const data = await response.json()

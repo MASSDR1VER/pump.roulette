@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useRouter } from 'next/navigation'
+import { config } from '@/lib/config'
 import { ArrowLeft, Copy, ExternalLink, Edit, LogOut, User, Wallet, Camera } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
@@ -38,7 +39,7 @@ export default function ProfilePage() {
     setIsUpdating(true)
     try {
       const token = localStorage.getItem('auth_token')
-      const response = await fetch('https://app.pump-roulette.com/api/v1/users/profile', {
+      const response = await fetch(`${config.api.baseUrl}/api/v1/users/profile`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

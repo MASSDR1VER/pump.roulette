@@ -220,8 +220,7 @@ class PumpFunClient:
             )
 
         except Exception as e:
-            logger.error(f"Error processing trade data: {e}")
-            logger.error(f"Data: {data}")
+            ""
 
     async def get_active_tokens(self, limit: int = 50) -> list[Token]:
         """

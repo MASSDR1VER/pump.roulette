@@ -35,8 +35,7 @@ import {
   setTrackMuted
 } from '@/lib/livekit-audio'
 
-// API base URL
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com/api/v1'
+import { config } from '@/lib/config'
 
 // LiveKit endpoint
 const LIVEKIT_ENDPOINT = 'wss://pump-udxzob1q.livekit.cloud'
@@ -115,30 +114,26 @@ export function TalkView({ roomId, token, role, onClose }: TalkViewProps) {
     setVerificationError(null)
 
     try {
-      // Get nonce
-      const nonceResponse = await fetch(`${API_BASE_URL}/auth/nonce`)
-      const { nonce } = await nonceResponse.json()
+      // Create message to sign with local nonce
+      const nonce = Math.floor(Math.random() * 1000000).toString()
+      const message = `Verify wallet for PumpRoulette room ${roomId} with nonce ${nonce}`
 
-      // Create message to sign
-      const message = `PumpRoulette Audio Verification
-Room: ${roomId}
-Role: ${role}
-Nonce: ${nonce}`
-
-      // Sign message
+      // Sign the message (returns base64 string)
       const signature = await signMessage(conn.provider, message)
 
       // Verify with backend - new room/verify endpoint
       const verifyResponse = await fetch(
-        `${API_BASE_URL}/audio/room/verify`,
+        `${config.api.baseUrl}/api/v1/audio/room/verify`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             pubkey: conn.pubkey,
+            room_id: roomId,
             role,
-            signature,
-            message
+            signature, // Already in base64 format from signMessage
+            nonce,
+            token: token // Include token if provided for recovery
           })
         }
       )

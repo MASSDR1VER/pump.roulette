@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { config } from '@/lib/config'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -58,7 +59,7 @@ export default function StreamerPage() {
     setIsJoining(true)
     try {
       const token = localStorage.getItem('auth_token')
-      const response = await fetch('https://app.pump-roulette.com/api/v1/audio/join', {
+      const response = await fetch(`${config.api.baseUrl}/api/v1/audio/join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -103,7 +104,7 @@ export default function StreamerPage() {
 
     try {
       const token = localStorage.getItem('auth_token')
-      await fetch('https://app.pump-roulette.com/api/v1/audio/leave', {
+      await fetch(`${config.api.baseUrl}/api/v1/audio/leave`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

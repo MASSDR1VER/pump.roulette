@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { config } from '@/lib/config'
 import { ArrowLeft, Users, Activity, Clock, ExternalLink } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
@@ -32,7 +33,7 @@ export default function RoomsPage() {
 
   const fetchActiveRooms = async () => {
     try {
-      const response = await fetch('https://app.pump-roulette.com/api/v1/chat/rooms')
+      const response = await fetch(`${config.api.baseUrl}/api/v1/chat/rooms`)
       const data = await response.json()
 
       if (data.success) {

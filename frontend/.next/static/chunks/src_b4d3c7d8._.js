@@ -797,7 +797,7 @@ var _s = __turbopack_context__.k.signature();
 ;
 ;
 ;
-const API_BASE_URL = __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f2e$pnpm$2f$next$40$15$2e$4$2e$4_react$2d$dom$40$19$2e$1$2e$0_react$40$19$2e$1$2e$0_$5f$react$40$19$2e$1$2e$0$2f$node_modules$2f$next$2f$dist$2f$build$2f$polyfills$2f$process$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["default"].env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com/api/v1';
+const API_BASE_URL = ("TURBOPACK compile-time truthy", 1) ? "".concat(("TURBOPACK compile-time value", "http://localhost:8000"), "/api/v1") : "TURBOPACK unreachable";
 function LiveKitStream(param) {
     let { stream, streamId, muted, onMuteChange } = param;
     _s();
@@ -2574,7 +2574,7 @@ var _s = __turbopack_context__.k.signature();
 ;
 ;
 // API base URL
-const API_BASE_URL = __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f2e$pnpm$2f$next$40$15$2e$4$2e$4_react$2d$dom$40$19$2e$1$2e$0_react$40$19$2e$1$2e$0_$5f$react$40$19$2e$1$2e$0$2f$node_modules$2f$next$2f$dist$2f$build$2f$polyfills$2f$process$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["default"].env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com/api/v1';
+const API_BASE_URL = ("TURBOPACK compile-time truthy", 1) ? "".concat(("TURBOPACK compile-time value", "http://localhost:8000"), "/api/v1") : "TURBOPACK unreachable";
 // LiveKit endpoint
 const LIVEKIT_ENDPOINT = 'wss://pump-udxzob1q.livekit.cloud';
 function TalkView(param) {

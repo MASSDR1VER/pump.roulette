@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import { config } from '@/lib/config'
 
 export interface User {
   wallet_address: string
@@ -54,7 +55,7 @@ export function useAuth() {
 
   const validateToken = async (token: string) => {
     try {
-      const response = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/validate', {
+      const response = await fetch(`${config.api.baseUrl}/api/v1/auth/wallet/validate`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -83,7 +84,7 @@ export function useAuth() {
 
   const getUserProfile = async (token: string) => {
     try {
-      const response = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/profile', {
+      const response = await fetch(`${config.api.baseUrl}/api/v1/auth/wallet/profile`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -140,7 +141,7 @@ export function useAuth() {
       console.log('Wallet connected:', walletAddress)
 
       // Step 1: Get authentication message
-      const connectResponse = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/connect', {
+      const connectResponse = await fetch(`${config.api.baseUrl}/api/v1/auth/wallet/connect`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -163,7 +164,7 @@ export function useAuth() {
       console.log('Message signed successfully')
 
       // Step 3: Verify signature and get token
-      const verifyResponse = await fetch('https://app.pump-roulette.com/api/v1/auth/wallet/verify', {
+      const verifyResponse = await fetch(`${config.api.baseUrl}/api/v1/auth/wallet/verify`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'

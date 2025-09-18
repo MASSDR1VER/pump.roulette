@@ -5,7 +5,6 @@ Manages WebRTC audio rooms for paired streamers using LiveKit.
 Handles room creation, token generation, and audio mixing for viewers.
 """
 
-import jwt
 import time
 import uuid
 import logging
@@ -13,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, List
 import os
 from dotenv import load_dotenv
+from livekit import api
 
 load_dotenv()
 
@@ -51,7 +51,7 @@ class AudioRoomService:
 
         logger.info("Audio Room Service initialized")
 
-    async def create_audio_room(self, pair_id: str, streamer_a_id: str, streamer_b_id: str) -> Dict[str, Any]:
+    async def create_audio_room(self, pair_id: str, streamer_a_id: str, streamer_b_id: str, summoner_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Create a new audio room for a stream pair.
 
@@ -91,9 +91,12 @@ class AudioRoomService:
             },
             "created_at": datetime.utcnow(),
             "expires_at": datetime.utcnow() + timedelta(hours=2),
-            "viewer_count": 0
+            "viewer_count": 0,
+            "summoner_id": None,  # Will be set when viewer creates the room
+            "viewer_notified": False  # Track if viewer has been notified
         }
 
+        room_info["summoner_id"] = summoner_id
         self.active_rooms[pair_id] = room_info
 
         logger.info(f"Created audio room for pair {pair_id}")
@@ -114,7 +117,7 @@ class AudioRoomService:
 
     def _generate_streamer_token(self, room_name: str, user_id: str, display_name: str) -> str:
         """
-        Generate JWT token for a streamer with publish permissions.
+        Generate JWT token for a streamer with publish permissions using official SDK.
 
         Args:
             room_name: LiveKit room name
@@ -124,32 +127,24 @@ class AudioRoomService:
         Returns:
             JWT token string
         """
-        # Token claims for streamer (can publish and subscribe)
-        claims = {
-            "video": {
-                "roomJoin": True,
-                "room": room_name,
-                "canPublish": True,
-                "canSubscribe": True,
-                "canPublishData": True,
-                "hidden": False
-            },
-            "metadata": f'{{"role":"streamer","display_name":"{display_name}"}}',
-            "name": display_name,
-            "iss": self.api_key,
-            "sub": user_id,
-            "exp": int(time.time()) + 3600,  # 1 hour expiry
-            "nbf": 0,
-            "iat": int(time.time())
-        }
+        # Use official LiveKit SDK for token generation
+        token = api.AccessToken(self.api_key, self.api_secret)
+        token = token.with_identity(user_id)
+        token = token.with_name(display_name)
+        token = token.with_metadata(f'{{"role":"streamer","display_name":"{display_name}"}}')
+        token = token.with_grants(api.VideoGrants(
+            room_join=True,
+            room=room_name,
+            can_publish=True,
+            can_subscribe=True,
+            can_publish_data=True
+        ))
 
-        # Generate JWT with HS256
-        token = jwt.encode(claims, self.api_secret, algorithm="HS256")
-        return token
+        return token.to_jwt()
 
     def generate_viewer_token(self, pair_id: str, viewer_id: Optional[str] = None) -> Optional[str]:
         """
-        Generate JWT token for a viewer with subscribe-only permissions.
+        Generate JWT token for a viewer with subscribe-only permissions using official SDK.
 
         Args:
             pair_id: Stream pair identifier
@@ -165,32 +160,26 @@ class AudioRoomService:
 
         room_name = room_info["room_name"]
         viewer_id = viewer_id or f"viewer_{uuid.uuid4().hex[:8]}"
+        display_name = f"Viewer {viewer_id[-4:]}"
 
-        # Token claims for viewer (can only subscribe, not publish)
-        claims = {
-            "video": {
-                "roomJoin": True,
-                "room": room_name,
-                "canPublish": False,
-                "canSubscribe": True,
-                "canPublishData": False,
-                "hidden": True  # Viewers are hidden participants
-            },
-            "metadata": '{"role":"viewer"}',
-            "name": f"Viewer {viewer_id[-4:]}",
-            "iss": self.api_key,
-            "sub": viewer_id,
-            "exp": int(time.time()) + 3600,  # 1 hour expiry
-            "nbf": 0,
-            "iat": int(time.time())
-        }
-
-        token = jwt.encode(claims, self.api_secret, algorithm="HS256")
+        # Use official LiveKit SDK for token generation
+        # IMPORTANT: Give viewers canPublishData=true so they can create/join rooms
+        token = api.AccessToken(self.api_key, self.api_secret)
+        token = token.with_identity(viewer_id)
+        token = token.with_name(display_name)
+        token = token.with_metadata(f'{{"role":"viewer","display_name":"{display_name}"}}')
+        token = token.with_grants(api.VideoGrants(
+            room_join=True,
+            room=room_name,
+            can_publish=False,  # Cannot publish audio/video
+            can_subscribe=True,  # Can listen to audio
+            can_publish_data=True  # Can publish data (allows room creation)
+        ))
 
         # Increment viewer count
         room_info["viewer_count"] += 1
 
-        return token
+        return token.to_jwt()
 
 
     async def get_room_info(self, pair_id: str) -> Optional[Dict[str, Any]]:
@@ -212,7 +201,7 @@ class AudioRoomService:
 
         return room_info
 
-    async def mark_streamer_joined(self, pair_id: str, streamer_id: str) -> bool:
+    async def mark_streamer_joined(self, pair_id: str, streamer_id: str) -> Tuple[bool, bool]:
         """
         Mark a streamer as having joined the audio room.
 
@@ -221,24 +210,64 @@ class AudioRoomService:
             streamer_id: Streamer identifier
 
         Returns:
-            True if successful, False otherwise
+            Tuple of (success, first_streamer) - True if this is the first streamer to join
         """
         room_info = self.active_rooms.get(pair_id)
         if not room_info:
-            return False
+            return False, False
+
+        # Check if this is the first streamer to join
+        first_streamer = not (room_info["streamer_a"]["joined"] or room_info["streamer_b"]["joined"])
 
         if room_info["streamer_a"]["id"] == streamer_id:
             room_info["streamer_a"]["joined"] = True
             room_info["streamer_a"]["joined_at"] = datetime.utcnow()
             logger.info(f"Streamer A joined room {pair_id}")
-            return True
+            return True, first_streamer
         elif room_info["streamer_b"]["id"] == streamer_id:
             room_info["streamer_b"]["joined"] = True
             room_info["streamer_b"]["joined_at"] = datetime.utcnow()
             logger.info(f"Streamer B joined room {pair_id}")
-            return True
+            return True, first_streamer
 
-        return False
+        return False, False
+
+    async def mark_streamer_joined_by_role(self, pair_id: str, role: str) -> Tuple[bool, bool]:
+        """
+        Mark a streamer as having joined based on their role.
+
+        Args:
+            pair_id: Stream pair identifier
+            role: Role (streamer_a or streamer_b)
+
+        Returns:
+            Tuple of (success, first_streamer) - True if this is the first streamer to join
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            return False, False
+
+        # Check if this is the first streamer to join
+        first_streamer = not (room_info["streamer_a"]["joined"] or room_info["streamer_b"]["joined"])
+
+        if role == "streamer_a":
+            room_info["streamer_a"]["joined"] = True
+            room_info["streamer_a"]["joined_at"] = datetime.utcnow()
+            # IMPORTANT: Set the has_streamer_joined flag so viewers can join
+            room_info["has_streamer_joined"] = True
+            logger.info(f"Streamer A joined room {pair_id} via role")
+            logger.info(f"Room {pair_id} has_streamer_joined flag set to True")
+            return True, first_streamer
+        elif role == "streamer_b":
+            room_info["streamer_b"]["joined"] = True
+            room_info["streamer_b"]["joined_at"] = datetime.utcnow()
+            # IMPORTANT: Set the has_streamer_joined flag so viewers can join
+            room_info["has_streamer_joined"] = True
+            logger.info(f"Streamer B joined room {pair_id} via role")
+            logger.info(f"Room {pair_id} has_streamer_joined flag set to True")
+            return True, first_streamer
+
+        return False, False
 
     async def cleanup_room(self, pair_id: str) -> bool:
         """
@@ -421,6 +450,36 @@ class AudioRoomService:
         if pair_id in self.active_rooms:
             return pair_id
         return None
+
+    async def get_viewer_token_for_stream_pair(self, pair_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get viewer token and room information for a stream pair.
+
+        Args:
+            pair_id: Stream pair identifier
+
+        Returns:
+            Dictionary with token, room_id and other info, or None if room doesn't exist
+        """
+        room_info = self.active_rooms.get(pair_id)
+        if not room_info:
+            logger.warning(f"No audio room found for pair {pair_id}")
+            return None
+
+        # Generate viewer token
+        viewer_token = self.generate_viewer_token(pair_id)
+        if not viewer_token:
+            return None
+
+        # Return complete room information including the actual room_id
+        return {
+            "success": True,
+            "stream_id": pair_id,
+            "room_id": room_info["room_name"],  # Return the actual LiveKit room name
+            "viewer_token": viewer_token,
+            "participants": await self.get_room_participants(pair_id),
+            "listener_count": room_info.get("viewer_count", 0)
+        }
 
     async def get_room_participants(self, pair_id: str) -> List[Dict[str, Any]]:
         """

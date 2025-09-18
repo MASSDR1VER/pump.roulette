@@ -6,6 +6,7 @@
 
 import { useState, useEffect } from 'react'
 import { useStreamPair } from '@/hooks/useStreamPair'
+import { config } from '@/lib/config'
 import { useAuth } from '@/hooks/useAuth'
 import { useWebSocket, type ChatMessage } from '@/hooks/useWebSocket'
 import { useAudioSubscription } from '@/hooks/useAudioSubscription'
@@ -37,7 +38,7 @@ import {
 export default function PumpRoulettePage() {
   const { streamPair, loading, error, fetchNewPair } = useStreamPair()
   const { user, connectWallet, logout, isConnecting, error: authError, isWalletConnected } = useAuth()
-  const { subscribeToAudio } = useAudioSubscription()
+  useAudioSubscription()
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -84,8 +85,36 @@ export default function PumpRoulettePage() {
     sendMessage: sendChatMessage,
     error: chatError,
     audioSummon,
-    audioJoinRequest
+    audioJoinRequest,
+    streamerReady
   } = useWebSocket(roomId, currentStreamPair)
+
+  // Handle streamer ready notification
+  useEffect(() => {
+    if (streamerReady && userRole === 'viewer') {
+      console.log('🎤 Streamer ready notification received:', streamerReady)
+
+      // Check if this is for our current audio room
+      if (streamerReady.room_id === audioRoomId) {
+        console.log('🎤 Setting viewer token from streamer_ready notification')
+
+        // Set the token and endpoint
+        setAudioRoomToken(streamerReady.viewer_token)
+        setAudioEndpoint(streamerReady.audio_endpoint || 'wss://pump-udxzob1q.livekit.cloud')
+
+        // Auto-connect if we have the token
+        if (streamerReady.viewer_token) {
+          console.log('🎤 Auto-connecting viewer to audio room')
+          setAudioEnabled(true)
+
+          toast({
+            title: "Streamer joined!",
+            description: "Connecting to audio room...",
+          })
+        }
+      }
+    }
+  }, [streamerReady, userRole, audioRoomId])
 
   // Check for active audio room when stream pair changes
   useEffect(() => {
@@ -97,7 +126,7 @@ export default function PumpRoulettePage() {
     const checkForActiveAudio = async () => {
       if (currentStreamPair?.room_id && !audioEnabled) {
         try {
-          const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${currentStreamPair.room_id}`)
+          const response = await fetch(`${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`)
           if (response.ok) {
             const data = await response.json()
             if (data.success && data.participants && data.participants.length > 0) {
@@ -155,6 +184,38 @@ export default function PumpRoulettePage() {
     }
   }, [audioJoinRequest, user, currentStreamPair, toast])
 
+  // Handle streamer ready notification - auto-connect viewers
+  useEffect(() => {
+    console.log('Streamer ready effect triggered:', {
+      streamerReady,
+      audioEnabled,
+      audioRoomToken,
+      showTalkView,
+      userRole
+    })
+
+    // Check if we're waiting for a streamer (audioEnabled but no token)
+    if (streamerReady && audioEnabled && !audioRoomToken && !showTalkView && userRole === 'viewer') {
+      console.log('AUTO-CONNECTING: Streamer ready notification received:', streamerReady)
+
+      // Auto-connect as viewer when streamer joins
+      if (streamerReady.viewer_token && streamerReady.audio_endpoint) {
+        console.log('Setting viewer token and connecting...')
+        setViewerAudioEnabled(true)
+        setAudioRoomToken(streamerReady.viewer_token)
+        setAudioRoomId(streamerReady.room_id)
+        setAudioEndpoint(streamerReady.audio_endpoint)
+        setUserRole('viewer')
+        setHasActiveAudio(true)
+
+        toast({
+          title: "🎤 Streamer joined!",
+          description: "Automatically connecting you to the audio room.",
+        })
+      }
+    }
+  }, [streamerReady, audioEnabled, audioRoomToken, showTalkView, userRole, toast])
+
   useEffect(() => {
     // Only run once on mount
     let mounted = true
@@ -199,7 +260,7 @@ export default function PumpRoulettePage() {
       // This is a random pair, create/update the room with full stream data
       const createRoomWithStreams = async () => {
         try {
-          const response = await fetch('https://app.pump-roulette.com/api/v1/chat/room/create', {
+          const response = await fetch(`${config.api.baseUrl}/api/v1/chat/room/create`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
@@ -297,7 +358,7 @@ export default function PumpRoulettePage() {
         }
       }
 
-      const response = await fetch(`https://app.pump-roulette.com/api/v1/chat/room/${roomId}/info`)
+      const response = await fetch(`${config.api.baseUrl}/api/v1/chat/room/${roomId}/info`)
       const data = await response.json()
 
       console.log('Room info response:', data)
@@ -368,7 +429,7 @@ export default function PumpRoulettePage() {
         // Room doesn't have stored stream data yet
         // Try to get it from active rooms list
         try {
-          const roomsResponse = await fetch('https://app.pump-roulette.com/api/v1/chat/rooms')
+          const roomsResponse = await fetch(`${config.api.baseUrl}/api/v1/chat/rooms`)
           const roomsData = await roomsResponse.json()
 
           if (roomsData.success && roomsData.rooms) {
@@ -419,17 +480,48 @@ export default function PumpRoulettePage() {
   const handleJoinAsListener = async () => {
     if (!currentStreamPair?.room_id) return
 
+    console.log('🎧 handleJoinAsListener called with:', {
+      room_id: currentStreamPair.room_id,
+      api_url: `${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`
+    })
+
+    // Create an audio context in user gesture context to enable autoplay
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    audioContext.resume()
+
     try {
-      const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${currentStreamPair.room_id}`)
+      const response = await fetch(`${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`)
+
+      console.log('🌐 API Response:', {
+        status: response.status,
+        ok: response.ok,
+        url: response.url
+      })
 
       if (response.ok) {
         const data = await response.json()
 
+        console.log('📊 API Success Data:', data)
+
         if (data.success && data.viewer_token) {
-          setViewerAudioEnabled(true)
-          setAudioRoomToken(data.viewer_token)
-          setAudioRoomId(currentStreamPair.room_id)
+          // Extract room_id from token or use data.room_id if provided
+          const actualRoomId = data.room_id || data.audio_room_id || currentStreamPair.room_id
+
+          console.log('🎯 Setting viewer audio state:', {
+            viewer_token: data.viewer_token.substring(0, 50) + '...',
+            room_id: actualRoomId,
+            endpoint: 'wss://pump-udxzob1q.livekit.cloud',
+            data_room_id: data.room_id,
+            data_audio_room_id: data.audio_room_id,
+            stream_pair_room_id: currentStreamPair.room_id
+          })
+
+          // Batch all state updates to prevent multiple renders
+          setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
           setUserRole('viewer')
+          setAudioRoomId(actualRoomId) // Use the actual room_id from backend
+          setAudioRoomToken(data.viewer_token)
+          setViewerAudioEnabled(true) // Enable audio last to trigger single render
           toast({
             title: "Joined audio",
             description: "You can now hear the conversation",
@@ -437,11 +529,25 @@ export default function PumpRoulettePage() {
         } else {
           throw new Error('No audio stream available')
         }
+      } else if (response.status === 425) {
+        // Handle "Too Early" - streamers haven't joined yet
+        toast({
+          title: "Streamers not ready",
+          description: "Waiting for streamers to join. Please try again in a moment.",
+          variant: "destructive",
+        })
+        return
       } else {
-        throw new Error('Failed to get viewer token')
+        const errorText = await response.text()
+        console.error('❌ API Error:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        })
+        throw new Error(`Failed to get viewer token: ${response.status}`)
       }
     } catch (error) {
-      console.error('Failed to join as listener:', error)
+      console.error('❌ Failed to join as listener:', error)
       toast({
         title: "Failed to join audio",
         description: "No active audio room for this stream pair",
@@ -451,37 +557,62 @@ export default function PumpRoulettePage() {
   }
 
   const handleListenAsViewer = async () => {
-    if (!currentStreamPair || !hasActiveAudio) {
+    if (!audioRoomId) {
       toast({
         title: "No active audio room",
-        description: "Waiting for streamers to join.",
+        description: "Please create an audio room first.",
         variant: "destructive"
+      })
+      return
+    }
+
+    // If we already have a token (from streamer_ready notification), just enable audio
+    if (audioRoomToken) {
+      console.log('Already have viewer token, enabling audio')
+      setAudioEnabled(true)
+      setMicEnabled(false) // Viewers start muted
+      setViewerAudioEnabled(true)
+
+      toast({
+        title: "Joining audio",
+        description: "Connecting as listener...",
       })
       return
     }
 
     try {
       // Get viewer token from backend
-      const response = await fetch(`https://app.pump-roulette.com/api/v1/audio/stream/${currentStreamPair.room_id}`)
+      console.log('Attempting to get viewer token for room:', audioRoomId)
+      const response = await fetch(`${config.api.baseUrl}/api/v1/audio/token/viewer/${audioRoomId}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      })
 
       if (response.ok) {
         const data = await response.json()
-        if (data.success && data.viewer_token) {
-          setViewerAudioEnabled(true)
-          setAudioRoomToken(data.viewer_token)
-          setAudioRoomId(currentStreamPair.room_id)
-          setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
-          setUserRole('viewer')
+        console.log('Got viewer token from API')
+        setAudioRoomToken(data.token)
+        setAudioEndpoint(data.audio_endpoint || 'wss://pump-udxzob1q.livekit.cloud')
+        setAudioEnabled(true)
+        setMicEnabled(false) // Viewers start muted
+        setViewerAudioEnabled(true)
+        setUserRole('viewer')
 
-          toast({
-            title: "Listening to audio",
-            description: "You can now hear the conversation.",
-          })
-        } else {
-          throw new Error('Failed to get viewer token')
-        }
+        toast({
+          title: "Joining audio",
+          description: "Connecting as listener...",
+        })
+      } else if (response.status === 425) {
+        // 425 Too Early - streamer hasn't joined yet
+        console.log('Streamers have not joined yet, waiting...')
+        toast({
+          title: "Waiting for streamers",
+          description: "Please wait for streamers to join the audio room first.",
+        })
       } else {
-        throw new Error('Failed to connect to audio')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || 'Failed to connect to audio')
       }
     } catch (error) {
       console.error('Failed to join as viewer:', error)
@@ -508,18 +639,44 @@ export default function PumpRoulettePage() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       stream.getTracks().forEach(track => track.stop()) // Stop the test stream
 
-      // Now join the audio room
-      setAudioEnabled(true)
-      setAudioRoomToken(audioRoomData.token)
-      setAudioRoomId(audioRoomData.roomId)
-      setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
-      setUserRole('streamer')
-      setStreamerJoinPending(false)
+      // Extract role from token URL params
+      const tokenParams = new URLSearchParams(audioRoomData.token.split('?')[1] || '')
+      const role = tokenParams.get('role') || 'streamer_a'
 
-      toast({
-        title: "Joined audio room",
-        description: "You can now speak with other participants.",
+      console.log('Verifying streamer with role:', role, 'room:', audioRoomData.roomId)
+
+      // Verify with backend that streamer is joining
+      const response = await fetch(`${config.api.baseUrl}/api/v1/audio/room/verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          room_id: audioRoomData.roomId,
+          role: role,
+          token: audioRoomData.token.split('token=')[1]?.split('&')[0] || audioRoomData.token
+        })
       })
+
+      if (response.ok) {
+        const data = await response.json()
+        console.log('Room verify response:', data)
+
+        // Now join the audio room
+        setAudioEnabled(true)
+        setAudioRoomToken(data.streamer_token || audioRoomData.token)
+        setAudioRoomId(audioRoomData.roomId)
+        setAudioEndpoint(data.audio_endpoint || 'wss://pump-udxzob1q.livekit.cloud')
+        setUserRole('streamer')
+        setStreamerJoinPending(false)
+
+        toast({
+          title: "Joined audio room",
+          description: "You can now speak with other participants.",
+        })
+      } else {
+        throw new Error('Failed to verify room')
+      }
     } catch (error) {
       console.error('Failed to join audio:', error)
       toast({
@@ -544,7 +701,7 @@ export default function PumpRoulettePage() {
 
     try {
       const token = localStorage.getItem('auth_token')
-      const response = await fetch('https://app.pump-roulette.com/api/v1/audio/summon', {
+      const response = await fetch(`${config.api.baseUrl}/api/v1/audio/summon`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -568,8 +725,9 @@ export default function PumpRoulettePage() {
         console.log("🔍 room_token:", data.room_token ? 'exists' : 'missing')
         console.log("🔍 room_id:", data.room_id)
 
+        // Don't set the token yet - wait for streamer to join
         setAudioEnabled(true)
-        setAudioRoomToken(data.room_token)
+        // setAudioRoomToken(data.room_token) // DON'T SET TOKEN YET - wait for streamer_ready
         setAudioRoomId(data.room_id)
 
         // Log what we're setting for audioEndpoint
@@ -587,7 +745,7 @@ export default function PumpRoulettePage() {
 
         toast({
           title: "Audio room created",
-          description: "Listening to room. Waiting for streamers to join.",
+          description: "Waiting for streamers to join...",
         })
       } else {
         throw new Error('Failed to create audio room')
@@ -915,7 +1073,9 @@ export default function PumpRoulettePage() {
                       <span className="text-xs text-green-400">{audioParticipants.length} streamer{audioParticipants.length > 1 ? 's' : ''} active</span>
                     </>
                   ) : (
-                    <span className="text-xs text-gray-500">Waiting for streamers to join...</span>
+                    <span className="text-xs text-gray-500">
+                      {audioRoomToken ? 'Streamers ready - click Listen to join!' : 'Waiting for streamers to join...'}
+                    </span>
                   )}
                 </div>
               )}
@@ -962,8 +1122,8 @@ export default function PumpRoulettePage() {
                 </button>
               )}
 
-              {/* Listen button for viewers when audio is active */}
-              {hasActiveAudio && !audioEnabled && !viewerAudioEnabled && !streamerJoinPending && userRole !== 'streamer' && (
+              {/* Listen button for viewers when audio is active or token is available */}
+              {((hasActiveAudio && userRole === 'viewer') || audioRoomToken) && !audioEnabled && !viewerAudioEnabled && !streamerJoinPending && userRole !== 'streamer' && (
                 <button
                   onClick={handleListenAsViewer}
                   className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30"
@@ -993,6 +1153,38 @@ export default function PumpRoulettePage() {
                 >
                   <Volume2 className="h-4 w-4" />
                   <span className="hidden sm:inline">Listen to Conversation</span>
+                </button>
+              )}
+
+              {/* Direct Token Test Button - for debugging */}
+              {!audioEnabled && !viewerAudioEnabled && (
+                <button
+                  onClick={() => {
+                    console.log('🧪 Direct token test clicked')
+                    // This token is from backend for room audio_E6FE2WsC_2BJz3yzx
+                    const testToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoiVmlld2VyIDM4NjEiLCJtZXRhZGF0YSI6IntcInJvbGVcIjpcInZpZXdlclwiLFwiZGlzcGxheV9uYW1lXCI6XCJWaWV3ZXIgMzg2MVwifSIsInZpZGVvIjp7InJvb21Kb2luIjp0cnVlLCJyb29tIjoiYXVkaW9fRTZGRTJXc0NfMkJKejN5engiLCJjYW5QdWJsaXNoIjpmYWxzZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJjYW5QdWJsaXNoRGF0YSI6dHJ1ZX0sInN1YiI6InZpZXdlcl8xNzU4MTY4NzkyLjg1Mzg2MSIsImlzcyI6IkFQSXBhbm13WFpCNERBbyIsIm5iZiI6MTc1ODE2ODc5MiwiZXhwIjoxNzU4MTkwMzkyfQ.jrKjxfhGaQd9-QsiCPRf3YoxC3FrssdNsi5_B1ebON8"
+
+                    console.log('🧪 Setting direct test token:', {
+                      token: testToken.substring(0, 50) + '...',
+                      room_id: 'audio_E6FE2WsC_2BJz3yzx', // IMPORTANT: Use the actual room ID from token
+                      endpoint: 'wss://pump-udxzob1q.livekit.cloud'
+                    })
+
+                    setViewerAudioEnabled(true)
+                    setAudioRoomToken(testToken)
+                    setAudioRoomId('audio_E6FE2WsC_2BJz3yzx') // MUST match the room ID in token!
+                    setUserRole('viewer')
+                    setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
+
+                    toast({
+                      title: "Testing direct token",
+                      description: "Connecting with known good token...",
+                    })
+                  }}
+                  className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-purple-500/20 text-purple-400 border border-purple-500/30 hover:bg-purple-500/30"
+                >
+                  <Volume2 className="h-4 w-4" />
+                  <span className="hidden sm:inline">Test Direct Token</span>
                 </button>
               )}
 
@@ -1140,7 +1332,19 @@ export default function PumpRoulettePage() {
           </div>
 
           {/* Audio Room */}
-          {audioEnabled && audioRoomToken && audioRoomId && audioEndpoint && (
+          {(() => {
+            const shouldRender = (audioEnabled || viewerAudioEnabled) && audioRoomToken && audioRoomId && audioEndpoint;
+            console.log('AudioRoom render check:', {
+              audioEnabled,
+              viewerAudioEnabled,
+              hasToken: !!audioRoomToken,
+              hasRoomId: !!audioRoomId,
+              hasEndpoint: !!audioEndpoint,
+              shouldRender
+            });
+            return null;
+          })()}
+          {((audioEnabled || viewerAudioEnabled) && audioRoomToken && audioRoomId && audioEndpoint) && (
             <div className="border-b border-[#25262b]">
               {(() => {
                 console.log("🎯 RENDERING AUDIOROOM WITH:", {

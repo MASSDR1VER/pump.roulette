@@ -72,6 +72,7 @@ class LeaveAudioRoomResponse(BaseModel):
 class RoomVerifyRequest(BaseModel):
     """Request model for room wallet verification."""
     pubkey: str = Field(..., description="Wallet public key")
+    room_id: str = Field(..., description="Room/pair identifier")
     role: str = Field(..., description="Role (streamer_a or streamer_b)")
     signature: str = Field(..., description="Signed message")
     nonce: str = Field(..., description="Nonce used in message")
@@ -97,9 +98,12 @@ class CreatorPublishTokenResponse(BaseModel):
     expires_in: int
 
 
+# Create a singleton instance of AudioRoomService
+_audio_room_service = AudioRoomService()
+
 def get_audio_room_service() -> AudioRoomService:
-    """Dependency to get audio room service."""
-    return AudioRoomService()
+    """Dependency to get audio room service (singleton)."""
+    return _audio_room_service
 
 
 def get_audio_service(request: Request):
@@ -159,10 +163,12 @@ async def summon_streamers(
 
     try:
         # Create audio room for the stream pair
+        summoner_id = current_user.get('wallet_address', current_user.get('id'))
         room_data = await audio_service.create_audio_room(
             pair_id=request.stream_pair_id,
             streamer_a_id=request.streamer_a_id,
-            streamer_b_id=request.streamer_b_id
+            streamer_b_id=request.streamer_b_id,
+            summoner_id=summoner_id
         )
 
         # Generate LiveKit token for the creator as a listener/viewer
@@ -321,6 +327,15 @@ async def get_audio_stream(
         if not room_info:
             raise HTTPException(status_code=404, detail="Audio room not found")
 
+        # IMPORTANT: Check if at least one streamer has joined
+        # This ensures the LiveKit room actually exists before viewer tries to connect
+        if not room_info.get("has_streamer_joined", False):
+            logger.info(f"Viewer attempting to join room {room_id} but no streamer has joined yet")
+            raise HTTPException(
+                status_code=425,  # Too Early
+                detail="Waiting for streamers to join. Please try again in a moment."
+            )
+
         # Generate LiveKit viewer token (no wallet required for listening)
         viewer_token = audio_service.generate_viewer_token(
             pair_id=pair_id,
@@ -366,20 +381,22 @@ async def room_verify(
         Dict[str, Any]: Token and room information if verified
     """
     try:
-        # Extract room_id from request (room_id might have the 'audio_' prefix)
-        room_id = request.pubkey.split('_')[-1] if '_' in request.pubkey else request.pubkey
+        # Use the room_id from the request
+        room_id = request.room_id
 
         # Get room information
         room_info = audio_service.active_rooms.get(room_id)
         if not room_info:
             raise HTTPException(status_code=404, detail="Audio room not found")
 
+        # Construct the expected message with the nonce
+        expected_message = f"Verify wallet for PumpRoulette room {room_id} with nonce {request.nonce}"
+
         # Verify wallet signature
-        message = request.signature
-        is_valid = await auth_service.verify_signature(
-            public_key=request.pubkey,
-            signature=request.signature,
-            message=message
+        is_valid = auth_service.verify_wallet_signature(
+            wallet_address=request.pubkey,
+            message=expected_message,
+            signature=request.signature
         )
 
         if not is_valid:
@@ -406,6 +423,64 @@ async def room_verify(
 
         if not streamer_token:
             raise HTTPException(status_code=403, detail="Not authorized for this role")
+
+        # Mark the streamer as joined based on their role
+        # Use the role to determine which streamer joined, not the pubkey
+        success = False
+        is_first_streamer = False
+
+        if request.role == "streamer_a":
+            # Mark streamer A as joined
+            success, is_first_streamer = await audio_service.mark_streamer_joined_by_role(room_id, "streamer_a")
+        elif request.role == "streamer_b":
+            # Mark streamer B as joined
+            success, is_first_streamer = await audio_service.mark_streamer_joined_by_role(room_id, "streamer_b")
+
+        if success and is_first_streamer:
+            # First streamer has joined - notify the summoner (viewer)
+            logger.info(f"First streamer joined room {room_id}, notifying viewer")
+
+            # Generate viewer token for the summoner
+            summoner_id = room_info.get("summoner_id")
+            logger.info(f"Room info - summoner_id: {summoner_id}, viewer_notified: {room_info.get('viewer_notified')}")
+            if summoner_id:
+                # Send WebSocket notification to the summoner
+                # Import app to get websocket_manager
+                from main import app
+                if hasattr(app.state, 'websocket_manager'):
+                    ws_manager = app.state.websocket_manager
+
+                    # IMPORTANT: Wait a bit before generating viewer token
+                    # This gives streamer time to fully connect to LiveKit and create the room
+                    import asyncio
+                    logger.info(f"Waiting 10 seconds for streamer to fully connect to LiveKit...")
+                    await asyncio.sleep(10)
+
+                    # Generate viewer token for auto-connect
+                    viewer_token = audio_service.generate_viewer_token(
+                        pair_id=room_id,
+                        viewer_id=f"viewer_{summoner_id[:8]}"
+                    )
+
+                    # Check which rooms are active in WebSocket manager
+                    logger.info(f"Active WebSocket rooms: {list(ws_manager.rooms.keys())}")
+                    logger.info(f"Trying to broadcast to room: {room_id}")
+
+                    # Send notification to all users in the room
+                    await ws_manager.broadcast_to_room(room_id, {
+                        "type": "streamer_ready",
+                        "data": {
+                            "room_id": room_id,
+                            "streamer_joined": request.role,
+                            "viewer_token": viewer_token,
+                            "audio_endpoint": audio_service.livekit_url,
+                            "message": "A streamer has joined! You can now connect to listen."
+                        }
+                    })
+
+                    # Mark that viewer has been notified
+                    room_info["viewer_notified"] = True
+                    logger.info(f"Sent streamer_ready notification for room {room_id} with viewer token")
 
         return {
             "success": True,

@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { config } from '@/lib/config'
 
 export interface Stream {
   stream_id: string
@@ -20,7 +21,7 @@ export interface StreamPair {
   stream_2: Stream
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com/api/v1'
+const API_BASE_URL = config.api.baseUrl ? `${config.api.baseUrl}/api/v1` : 'https://app.pump-roulette.com/api/v1'
 
 export function useStreamPair() {
   const [streamPair, setStreamPair] = useState<StreamPair | null>(null)

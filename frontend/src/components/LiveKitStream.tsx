@@ -42,7 +42,7 @@ interface LiveKitStreamProps {
   onMuteChange?: (muted: boolean) => void
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com/api/v1'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : 'https://app.pump-roulette.com/api/v1'
 
 export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKitStreamProps) {
   const videoContainerRef = useRef<HTMLDivElement>(null)

@@ -157,6 +157,35 @@ async def health_check():
     }
 
 
+@app.get("/api/v1/audio/stream/{stream_pair_id}")
+async def get_viewer_token_for_stream(stream_pair_id: str):
+    """
+    Get viewer token for listening to a stream pair's audio room.
+
+    Args:
+        stream_pair_id: The stream pair ID
+
+    Returns:
+        Viewer token and room information
+    """
+    audio_service = app.state.audio_room_service
+
+    # Check if both streamers have joined
+    has_joined = await audio_service.has_streamer_joined(stream_pair_id)
+    if not has_joined:
+        # Return 425 Too Early if streamers haven't joined yet
+        from fastapi import HTTPException
+        raise HTTPException(status_code=425, detail="Streamers have not joined yet")
+
+    # Get viewer token and room info
+    result = await audio_service.get_viewer_token_for_stream_pair(stream_pair_id)
+    if not result:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="No active audio room for this stream pair")
+
+    return result
+
+
 if __name__ == "__main__":
     """
     Run the application using Uvicorn ASGI server.

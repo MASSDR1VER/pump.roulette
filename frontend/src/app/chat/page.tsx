@@ -6,6 +6,7 @@
 'use client'
 
 import { useState } from 'react'
+import { config } from '@/lib/config'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
   MessageSquare,
@@ -79,7 +80,7 @@ export default function ChatPage() {
   const { data: messagesData, isLoading: messagesLoading } = useQuery({
     queryKey: ['listing-messages', selectedListing, selectedAccount],
     queryFn: () => selectedListing && selectedAccount ? 
-      fetch(`https://app.pump-roulette.com/api/chat/messages/listing/${selectedListing}?account_id=${selectedAccount}`)
+      fetch(`${config.api.baseUrl}/api/chat/messages/listing/${selectedListing}?account_id=${selectedAccount}`)
         .then(res => res.json()) : null,
     enabled: !!(selectedListing && selectedAccount),
     refetchInterval: 10000, // Refresh every 10 seconds
@@ -96,7 +97,7 @@ export default function ChatPage() {
   const { data: statsData } = useQuery({
     queryKey: ['chat-statistics'],
     queryFn: async () => {
-      const response = await fetch('https://app.pump-roulette.com/api/chat/statistics')
+      const response = await fetch(`${config.api.baseUrl}/api/chat/statistics`)
       if (!response.ok) throw new Error('Failed to fetch statistics')
       return response.json()
     },

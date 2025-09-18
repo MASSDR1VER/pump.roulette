@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
+import { config } from '@/lib/config'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.pump-roulette.com'
+const API_BASE_URL = config.api.baseUrl || 'https://app.pump-roulette.com'
 
 interface AudioTokens {
   room_id: string
