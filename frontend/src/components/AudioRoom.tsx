@@ -116,18 +116,9 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
             autoGainControl: true,
             echoCancellation: true,
             noiseSuppression: true,
-            channelCount: 2, // Stereo for better quality
-            sampleRate: 48000,
           },
-          adaptiveStream: false, // Disable adaptive stream for consistent quality
-          dynacast: false, // Disable dynacast for audio rooms
-          publishDefaults: {
-            audioPreset: {
-              maxBitrate: 128000, // Increase bitrate for better quality
-            }
-          },
-          // Disable video since we're audio-only
-          videoCaptureDefaults: false
+          adaptiveStream: true,
+          dynacast: true,
         })
 
         roomRef.current = newRoom
@@ -156,10 +147,11 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
           }
         })
 
-        newRoom.on(RoomEvent.Disconnected, () => {
-          console.log('Disconnected from audio room')
+        newRoom.on(RoomEvent.Disconnected, (reason?: any) => {
+          console.log('⚠️ Disconnected from audio room:', { reason, role, token: token?.substring(0, 20) })
           setIsConnected(false)
-          handleDisconnect()
+          // Don't immediately trigger onDisconnect for connection issues
+          // This prevents the button from disappearing on temporary disconnects
         })
 
         newRoom.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
@@ -228,70 +220,52 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
           })
 
           if (track.kind === Track.Kind.Audio) {
-            // Don't subscribe to our own audio track
-            if (participant === newRoom.localParticipant) {
-              console.log('⚠️ Skipping own audio track')
-              return
-            }
+            console.log(`🔊 Subscribed to ${participant.identity}'s audio track`, {
+              trackMuted: track.isMuted,
+              publicationMuted: publication.isMuted,
+              trackSource: track.source,
+              trackKind: track.kind,
+              participantRole: participantMetadata.role
+            })
 
-            // Viewers should only hear streamers
-            if ((role === 'viewer' || role === 'listener')) {
-              // Check if this participant is a streamer
-              const isStreamer = participantMetadata.role === 'streamer' ||
-                               participantMetadata.role === 'streamer_a' ||
-                               participantMetadata.role === 'streamer_b' ||
-                               participant.identity?.includes('Streamer')
-
-              if (!isStreamer) {
-                console.log('⚠️ Viewer skipping non-streamer audio:', participant.identity)
-                return
-              }
-            }
-
-            // Check if audio element already exists for this track
-            const existingElement = document.querySelector(`[data-track-sid="${track.sid}"]`)
-            if (existingElement) {
-              console.log('⚠️ Audio element already exists for track:', track.sid)
-              existingElement.remove()
-            }
-
-            // Attach audio track to DOM
+            // Simply attach the audio element like the test HTML does
             const audioElement = track.attach()
-
-            // Configure audio element BEFORE adding to DOM
-            audioElement.autoplay = true
-            audioElement.controls = false
             audioElement.style.display = 'none'
-            audioElement.volume = 0.8 // Reduce volume slightly to prevent distortion
 
-            // IMPORTANT: Respect the initial mute state
-            if (track.isMuted) {
+            // IMPORTANT: Check if the track should be muted based on publication state
+            // LiveKit sometimes doesn't properly sync the mute state
+            if (publication.isMuted || track.isMuted) {
               audioElement.muted = true
-              console.log('🔇 Track is muted, muting audio element')
-            } else {
-              audioElement.muted = false
-              console.log('🔊 Track is unmuted, unmuting audio element')
+              console.log('🔇 Muting audio element because track/publication is muted')
             }
 
-            // Store element reference for cleanup
+            // Store reference for cleanup
             audioElement.dataset.trackSid = track.sid
             audioElement.dataset.participantId = participant.identity
 
             // Add to DOM
             document.body.appendChild(audioElement)
 
-            console.log('🎵 Audio track attached to DOM for:', participant.identity, {
-              trackMuted: track.isMuted,
-              elementMuted: audioElement.muted,
-              volume: audioElement.volume,
-              paused: audioElement.paused,
-              autoplay: audioElement.autoplay,
-              src: audioElement.src,
-              readyState: audioElement.readyState
+            // Debug: Check the actual audio element state
+            console.log('✅ Audio element attached for:', participant.identity, {
+              audioElementMuted: audioElement.muted,
+              audioElementVolume: audioElement.volume,
+              audioElementPaused: audioElement.paused,
+              hasSourceObject: !!audioElement.srcObject
             })
 
-            // Don't call play() - let autoplay handle it
-            // LiveKit's track.attach() already sets up the MediaStream correctly
+            // Debug: Listen for audio element events
+            audioElement.addEventListener('play', () => {
+              console.log('🎵 Audio started playing for:', participant.identity)
+            })
+
+            audioElement.addEventListener('pause', () => {
+              console.log('⏸️ Audio paused for:', participant.identity)
+            })
+
+            audioElement.addEventListener('volumechange', () => {
+              console.log('🔊 Volume changed for:', participant.identity, 'muted:', audioElement.muted)
+            })
 
             updateParticipants()
           }
@@ -323,28 +297,46 @@ export default function AudioRoom({ roomId, token, role, livekitUrl = 'wss://pum
         })
 
         newRoom.on(RoomEvent.TrackMuted, (publication, participant) => {
-          console.log('🔇 Track muted:', participant.identity)
+          console.log('🔇 Track muted event:', {
+            participant: participant.identity,
+            trackSid: publication.trackSid,
+            kind: publication.kind,
+            isMuted: publication.isMuted
+          })
 
           if (publication.kind === Track.Kind.Audio) {
-            // Find and mute the audio element
+            // Find and ACTUALLY mute the audio element
             const audioElement = document.querySelector(`[data-track-sid="${publication.trackSid}"]`) as HTMLAudioElement
             if (audioElement) {
               audioElement.muted = true
-              console.log('🔇 Muted audio element for:', participant.identity)
+              console.log('🔇 Manually muted audio element for:', participant.identity, {
+                elementMuted: audioElement.muted,
+                elementPaused: audioElement.paused,
+                elementVolume: audioElement.volume
+              })
             }
             updateParticipants()
           }
         })
 
         newRoom.on(RoomEvent.TrackUnmuted, (publication, participant) => {
-          console.log('🔊 Track unmuted:', participant.identity)
+          console.log('🔊 Track unmuted event:', {
+            participant: participant.identity,
+            trackSid: publication.trackSid,
+            kind: publication.kind,
+            isMuted: publication.isMuted
+          })
 
           if (publication.kind === Track.Kind.Audio) {
-            // Find and unmute the audio element
+            // Find and ACTUALLY unmute the audio element
             const audioElement = document.querySelector(`[data-track-sid="${publication.trackSid}"]`) as HTMLAudioElement
             if (audioElement) {
               audioElement.muted = false
-              console.log('🔊 Unmuted audio element for:', participant.identity)
+              console.log('🔊 Manually unmuted audio element for:', participant.identity, {
+                elementMuted: audioElement.muted,
+                elementPaused: audioElement.paused,
+                elementVolume: audioElement.volume
+              })
             }
             updateParticipants()
           }

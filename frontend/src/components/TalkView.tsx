@@ -45,12 +45,13 @@ interface TalkViewProps {
   token?: string  // Optional now, will be fetched after wallet verification
   role: string
   onClose: () => void
+  onAudioEnabled?: (enabled: boolean, token: string, roomId: string, endpoint: string) => void
 }
 
 type VerificationState = 'idle' | 'connecting' | 'verifying' | 'verified' | 'error'
 type AudioState = 'disabled' | 'enabling' | 'enabled' | 'error'
 
-export function TalkView({ roomId, token, role, onClose }: TalkViewProps) {
+export function TalkView({ roomId, token, role, onClose, onAudioEnabled }: TalkViewProps) {
   // Wallet state
   const [wallet, setWallet] = useState<WalletConnection | null>(null)
   const [verificationState, setVerificationState] = useState<VerificationState>('idle')
@@ -191,6 +192,14 @@ export function TalkView({ roomId, token, role, onClose }: TalkViewProps) {
       setLocalTrack(audioTrack)
       setAudioState('enabled')
 
+      // Notify parent component that audio is enabled
+      console.log('🎤 TalkView: Calling onAudioEnabled callback', { audioToken, roomId, audioEndpoint })
+      if (onAudioEnabled) {
+        onAudioEnabled(true, audioToken, roomId, audioEndpoint)
+      } else {
+        console.log('⚠️ TalkView: onAudioEnabled callback not provided')
+      }
+
     } catch (error) {
       console.error('Failed to enable audio:', error)
       setAudioState('error')
@@ -229,29 +238,9 @@ export function TalkView({ roomId, token, role, onClose }: TalkViewProps) {
   }, [room, localTrack, wallet])
 
 
-  // Simplified UI for streamers - just a small control bar
+  // Streamers use the control bar for audio controls, so just return null when connected
   if (isStreamer && audioState === 'enabled') {
-    return (
-      <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20">
-        <div className="bg-[#181821]/95 backdrop-blur-sm rounded-lg px-4 py-2 flex items-center gap-3">
-          <div className="px-2 py-1 bg-red-500 rounded text-white font-semibold animate-pulse text-xs">
-            LIVE
-          </div>
-          <button
-            onClick={handleToggleMute}
-            className={`p-1.5 ${isMuted ? 'bg-red-500/20 text-red-500' : 'bg-[#7DE2A1]/20 text-[#7DE2A1]'} rounded transition-colors`}
-          >
-            {isMuted ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
-          </button>
-          <button
-            onClick={handleLeaveRoom}
-            className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs transition-colors"
-          >
-            Leave
-          </button>
-        </div>
-      </div>
-    )
+    return null
   }
 
   return (

@@ -228,6 +228,7 @@ export default function PumpRoulettePage() {
       if (roleParam && (roleParam === 'streamer_a' || roleParam === 'streamer_b')) {
         console.log('Streamer role detected, showing wallet verification')
         setShowTalkView(true)
+        setUserRole('streamer')  // Set role to streamer immediately
         setCustomRoomId(roomParam)
 
         // Load room data for streamer
@@ -301,6 +302,29 @@ export default function PumpRoulettePage() {
       })
     }
   }, [authError, toast])
+
+  // Debug: Monitor audio control state
+  useEffect(() => {
+    console.log('🎮 Control state updated:', {
+      userRole,
+      audioEnabled,
+      showTalkView,
+      roleParam,
+      isWalletConnected,
+      shouldShowControls: userRole === 'streamer' && audioEnabled
+    })
+  }, [userRole, audioEnabled, showTalkView, roleParam, isWalletConnected])
+
+  // Auto-join audio when streamer connects wallet
+  useEffect(() => {
+    if (isWalletConnected && roleParam && (roleParam === 'streamer_a' || roleParam === 'streamer_b') && !audioEnabled && showTalkView) {
+      console.log('Streamer wallet connected, auto-joining audio...')
+      // Small delay to ensure everything is ready
+      setTimeout(() => {
+        handleJoinVoiceAsStreamer()
+      }, 500)
+    }
+  }, [isWalletConnected, roleParam, audioEnabled, showTalkView])
 
   // Show chat errors
   useEffect(() => {
@@ -485,10 +509,6 @@ export default function PumpRoulettePage() {
       api_url: `${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`
     })
 
-    // Create an audio context in user gesture context to enable autoplay
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-    audioContext.resume()
-
     try {
       const response = await fetch(`${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`)
 
@@ -556,73 +576,6 @@ export default function PumpRoulettePage() {
     }
   }
 
-  const handleListenAsViewer = async () => {
-    if (!audioRoomId) {
-      toast({
-        title: "No active audio room",
-        description: "Please create an audio room first.",
-        variant: "destructive"
-      })
-      return
-    }
-
-    // If we already have a token (from streamer_ready notification), just enable audio
-    if (audioRoomToken) {
-      console.log('Already have viewer token, enabling audio')
-      setAudioEnabled(true)
-      setMicEnabled(false) // Viewers start muted
-      setViewerAudioEnabled(true)
-
-      toast({
-        title: "Joining audio",
-        description: "Connecting as listener...",
-      })
-      return
-    }
-
-    try {
-      // Get viewer token from backend
-      console.log('Attempting to get viewer token for room:', audioRoomId)
-      const response = await fetch(`${config.api.baseUrl}/api/v1/audio/token/viewer/${audioRoomId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        console.log('Got viewer token from API')
-        setAudioRoomToken(data.token)
-        setAudioEndpoint(data.audio_endpoint || 'wss://pump-udxzob1q.livekit.cloud')
-        setAudioEnabled(true)
-        setMicEnabled(false) // Viewers start muted
-        setViewerAudioEnabled(true)
-        setUserRole('viewer')
-
-        toast({
-          title: "Joining audio",
-          description: "Connecting as listener...",
-        })
-      } else if (response.status === 425) {
-        // 425 Too Early - streamer hasn't joined yet
-        console.log('Streamers have not joined yet, waiting...')
-        toast({
-          title: "Waiting for streamers",
-          description: "Please wait for streamers to join the audio room first.",
-        })
-      } else {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || 'Failed to connect to audio')
-      }
-    } catch (error) {
-      console.error('Failed to join as viewer:', error)
-      toast({
-        title: "Failed to join audio",
-        description: "Please try again.",
-        variant: "destructive"
-      })
-    }
-  }
 
   const handleJoinVoiceAsStreamer = async () => {
     if (!audioRoomData || !audioRoomData.token) {
@@ -1038,29 +991,6 @@ export default function PumpRoulettePage() {
           {/* Control Bar */}
           <div className="border-b border-[#25262b] px-2 sm:px-4 py-2 flex flex-col sm:flex-row items-start sm:items-center justify-between bg-[#181821] gap-2">
             <div className="flex items-center gap-3">
-              {/* Show audio controls for streamers who have joined */}
-              {userRole === 'streamer' && audioEnabled && (
-                <div className="flex items-center gap-2">
-                  <div className="px-2 py-1 bg-red-500 rounded text-white font-semibold animate-pulse text-xs">
-                    LIVE
-                  </div>
-                  <button
-                    onClick={() => setMicEnabled(!micEnabled)}
-                    className={`p-1.5 ${!micEnabled ? 'bg-red-500/20 text-red-500' : 'bg-[#7DE2A1]/20 text-[#7DE2A1]'} rounded transition-colors`}
-                  >
-                    {!micEnabled ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setAudioEnabled(false)
-                      window.location.href = '/'
-                    }}
-                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs transition-colors"
-                  >
-                    Leave
-                  </button>
-                </div>
-              )}
               {/* Show audio status for summon creator (listener) */}
               {userRole === 'viewer' && audioEnabled && !tokenParam && (
                 <div className="flex items-center gap-2">
@@ -1090,8 +1020,38 @@ export default function PumpRoulettePage() {
                 </button>
               )}
 
-              {/* Regular Summon/End Call button - only show for non-streamers when not in audio */}
-              {!tokenParam && !audioEnabled && (
+              {/* Streamer audio controls */}
+              {userRole === 'streamer' && audioEnabled && (
+                <>
+                  <div className="px-2 py-1 bg-red-500 rounded text-white font-semibold animate-pulse text-xs">
+                    LIVE
+                  </div>
+                  <button
+                    onClick={() => setMicEnabled(!micEnabled)}
+                    className={`px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      !micEnabled
+                        ? 'bg-red-500/20 text-red-500 border border-red-500/30 hover:bg-red-500/30'
+                        : 'bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]'
+                    }`}
+                  >
+                    {!micEnabled ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                    <span className="hidden sm:inline">{!micEnabled ? 'Unmute' : 'Mute'}</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setAudioEnabled(false)
+                      window.location.href = '/'
+                    }}
+                    className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]"
+                  >
+                    <PhoneOff className="h-4 w-4" />
+                    <span className="hidden sm:inline">Leave</span>
+                  </button>
+                </>
+              )}
+
+              {/* Summon Streamers button - only show for non-streamers when not in audio and no active audio */}
+              {!tokenParam && !audioEnabled && userRole !== 'streamer' && !hasActiveAudio && !showTalkView && roleParam !== 'streamer_a' && roleParam !== 'streamer_b' && (
                 <button
                   onClick={handleSummonStreamers}
                   disabled={!isWalletConnected}
@@ -1122,73 +1082,18 @@ export default function PumpRoulettePage() {
                 </button>
               )}
 
-              {/* Listen button for viewers when audio is active or token is available */}
-              {((hasActiveAudio && userRole === 'viewer') || audioRoomToken) && !audioEnabled && !viewerAudioEnabled && !streamerJoinPending && userRole !== 'streamer' && (
-                <button
-                  onClick={handleListenAsViewer}
-                  className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30"
-                >
-                  <Volume2 className="h-4 w-4" />
-                  <span>Listen</span>
-                </button>
-              )}
-
-              {/* Stop listening button */}
-              {viewerAudioEnabled && (
-                <button
-                  onClick={() => setViewerAudioEnabled(false)}
-                  className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30"
-                >
-                  <VolumeX className="h-4 w-4" />
-                  <span>Stop Listening</span>
-                </button>
-              )}
-
-
-              {/* Show listen button for viewers when there's active audio */}
-              {hasActiveAudio && !audioEnabled && !viewerAudioEnabled && (
+              {/* Listen to Conversation button - styled like Summon Streamers */}
+              {hasActiveAudio && !audioEnabled && !viewerAudioEnabled && userRole === 'viewer' && (
                 <button
                   onClick={handleJoinAsListener}
-                  className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30 animate-pulse"
+                  className="px-2 py-0.5 rounded-sm text-xs font-medium transition-all flex items-center gap-1 bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]"
                 >
-                  <Volume2 className="h-4 w-4" />
-                  <span className="hidden sm:inline">Listen to Conversation</span>
+                  <Volume2 className="h-3.5 w-3.5" />
+                  <span className="text-[11px]">Listen to Conversation</span>
                 </button>
               )}
 
-              {/* Direct Token Test Button - for debugging */}
-              {!audioEnabled && !viewerAudioEnabled && (
-                <button
-                  onClick={() => {
-                    console.log('🧪 Direct token test clicked')
-                    // This token is from backend for room audio_E6FE2WsC_2BJz3yzx
-                    const testToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoiVmlld2VyIDM4NjEiLCJtZXRhZGF0YSI6IntcInJvbGVcIjpcInZpZXdlclwiLFwiZGlzcGxheV9uYW1lXCI6XCJWaWV3ZXIgMzg2MVwifSIsInZpZGVvIjp7InJvb21Kb2luIjp0cnVlLCJyb29tIjoiYXVkaW9fRTZGRTJXc0NfMkJKejN5engiLCJjYW5QdWJsaXNoIjpmYWxzZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJjYW5QdWJsaXNoRGF0YSI6dHJ1ZX0sInN1YiI6InZpZXdlcl8xNzU4MTY4NzkyLjg1Mzg2MSIsImlzcyI6IkFQSXBhbm13WFpCNERBbyIsIm5iZiI6MTc1ODE2ODc5MiwiZXhwIjoxNzU4MTkwMzkyfQ.jrKjxfhGaQd9-QsiCPRf3YoxC3FrssdNsi5_B1ebON8"
-
-                    console.log('🧪 Setting direct test token:', {
-                      token: testToken.substring(0, 50) + '...',
-                      room_id: 'audio_E6FE2WsC_2BJz3yzx', // IMPORTANT: Use the actual room ID from token
-                      endpoint: 'wss://pump-udxzob1q.livekit.cloud'
-                    })
-
-                    setViewerAudioEnabled(true)
-                    setAudioRoomToken(testToken)
-                    setAudioRoomId('audio_E6FE2WsC_2BJz3yzx') // MUST match the room ID in token!
-                    setUserRole('viewer')
-                    setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
-
-                    toast({
-                      title: "Testing direct token",
-                      description: "Connecting with known good token...",
-                    })
-                  }}
-                  className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-purple-500/20 text-purple-400 border border-purple-500/30 hover:bg-purple-500/30"
-                >
-                  <Volume2 className="h-4 w-4" />
-                  <span className="hidden sm:inline">Test Direct Token</span>
-                </button>
-              )}
-
-              {/* Show leave audio button for viewers */}
+              {/* Stop Listening button */}
               {viewerAudioEnabled && (
                 <button
                   onClick={() => {
@@ -1200,10 +1105,10 @@ export default function PumpRoulettePage() {
                       description: "No longer listening to the conversation",
                     })
                   }}
-                  className="px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30"
+                  className="px-2 py-0.5 rounded-sm text-xs font-medium transition-all flex items-center gap-1 bg-[#25262b] hover:bg-[#2a2b30] text-gray-400 border border-[#2a2b30]"
                 >
-                  <VolumeX className="h-4 w-4" />
-                  <span className="hidden sm:inline">Stop Listening</span>
+                  <VolumeX className="h-3.5 w-3.5" />
+                  <span className="text-[11px]">Stop Listening</span>
                 </button>
               )}
 
@@ -1282,6 +1187,16 @@ export default function PumpRoulettePage() {
                         // Clear URL params
                         router.push('/')
                       }}
+                      onAudioEnabled={(enabled, token, roomId, endpoint) => {
+                        console.log('🎤 TalkView audio enabled callback:', { enabled, token, roomId, endpoint })
+                        setAudioEnabled(enabled)
+                        setAudioRoomToken(token)
+                        setAudioRoomId(roomId)
+                        setAudioEndpoint(endpoint)
+                        setUserRole('streamer')
+                        setMicEnabled(true)
+                        console.log('🎤 States set:', { audioEnabled: enabled, userRole: 'streamer', micEnabled: true })
+                      }}
                     />
                   )}
                 </div>
@@ -1310,6 +1225,16 @@ export default function PumpRoulettePage() {
                         setShowTalkView(false)
                         // Clear URL params
                         router.push('/')
+                      }}
+                      onAudioEnabled={(enabled, token, roomId, endpoint) => {
+                        console.log('🎤 TalkView audio enabled callback:', { enabled, token, roomId, endpoint })
+                        setAudioEnabled(enabled)
+                        setAudioRoomToken(token)
+                        setAudioRoomId(roomId)
+                        setAudioEndpoint(endpoint)
+                        setUserRole('streamer')
+                        setMicEnabled(true)
+                        console.log('🎤 States set:', { audioEnabled: enabled, userRole: 'streamer', micEnabled: true })
                       }}
                     />
                   )}
@@ -1344,7 +1269,8 @@ export default function PumpRoulettePage() {
             });
             return null;
           })()}
-          {((audioEnabled || viewerAudioEnabled) && audioRoomToken && audioRoomId && audioEndpoint) && (
+          {/* Only render AudioRoom if NOT using TalkView (TalkView manages its own connection) */}
+          {((audioEnabled || viewerAudioEnabled) && audioRoomToken && audioRoomId && audioEndpoint && !showTalkView) && (
             <div className="border-b border-[#25262b]">
               {(() => {
                 console.log("🎯 RENDERING AUDIOROOM WITH:", {
@@ -1370,6 +1296,7 @@ export default function PumpRoulettePage() {
                   })))
                 }}
                 onDisconnect={() => {
+                  console.log('⚠️ AudioRoom disconnected:', { role: userRole })
                   if (userRole === 'streamer') {
                     setAudioEnabled(false)
                   } else {
