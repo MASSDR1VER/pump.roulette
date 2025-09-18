@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import { config } from '@/lib/config'
 
 export interface Stream {
@@ -27,31 +27,8 @@ export function useStreamPair() {
   const [streamPair, setStreamPair] = useState<StreamPair | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const fetchingRef = useRef(false)
-  const retryCountRef = useRef(0)
-  const MAX_RETRIES = 3
 
-  const fetchNewPair = useCallback(async (isRetry: boolean = false): Promise<boolean> => {
-    // Prevent concurrent requests
-    if (fetchingRef.current) {
-      console.log('Already fetching, skipping duplicate request')
-      return false
-    }
-
-    // Check retry limit
-    if (isRetry) {
-      if (retryCountRef.current >= MAX_RETRIES) {
-        console.warn('Max retries reached, stopping automatic retries')
-        setError('Unable to find live streams after multiple attempts')
-        return false
-      }
-      retryCountRef.current++
-    } else {
-      // Reset retry counter for manual requests
-      retryCountRef.current = 0
-    }
-
-    fetchingRef.current = true
+  const fetchNewPair = useCallback(async (): Promise<boolean> => {
     setLoading(true)
     setError(null)
 
@@ -79,13 +56,9 @@ export function useStreamPair() {
           ])
 
           if (!verify1.is_live || !verify2.is_live) {
-            console.warn('One or both streams are not live, retrying after delay')
-            // Add delay before retry to prevent rapid requests
-            setTimeout(() => {
-              fetchingRef.current = false // Reset the flag before retry
-              fetchNewPair(true) // Pass true to indicate this is a retry
-            }, 1000) // 1 second delay
-            return false
+            console.warn('One or both streams are not live, fetching new pair')
+            // Recursively fetch new pair if either stream is not live
+            return fetchNewPair()
           }
         } catch (verifyError) {
           console.warn('Failed to verify streams, using them anyway:', verifyError)
@@ -102,7 +75,6 @@ export function useStreamPair() {
       return false
     } finally {
       setLoading(false)
-      fetchingRef.current = false
     }
   }, [])
 

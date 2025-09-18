@@ -50,6 +50,22 @@ export function useAuth() {
       if (token) {
         validateToken(token)
       }
+
+      // Listen for auth login events from TalkView
+      const handleAuthLogin = (event: CustomEvent) => {
+        const { token, user: userData } = event.detail
+        if (token && userData) {
+          // Set user data immediately
+          setUser(userData)
+          // Validate token to ensure it's still valid
+          validateToken(token)
+        }
+      }
+
+      window.addEventListener('auth:login', handleAuthLogin as EventListener)
+      return () => {
+        window.removeEventListener('auth:login', handleAuthLogin as EventListener)
+      }
     }
   }, [])
 

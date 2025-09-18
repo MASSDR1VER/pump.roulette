@@ -116,7 +116,7 @@ export default function PumpRoulettePage() {
     }
   }, [streamerReady, userRole, audioRoomId])
 
-  // Check for active audio room when stream pair changes
+  // Check for active audio room when stream pair changes and poll periodically
   useEffect(() => {
     // Skip if TalkView is showing
     if (showTalkView) {
@@ -131,7 +131,19 @@ export default function PumpRoulettePage() {
             const data = await response.json()
             if (data.success && data.participants && data.participants.length > 0) {
               setHasActiveAudio(true)
-              console.log('Active audio room detected for this stream pair')
+              console.log('Active audio room detected:', {
+                room_id: currentStreamPair.room_id,
+                participants: data.participants.length,
+                listener_count: data.listener_count
+              })
+
+              // Store viewer token if available
+              if (data.viewer_token && !audioRoomToken) {
+                console.log('Storing viewer token from polling')
+                setAudioRoomToken(data.viewer_token)
+                setAudioRoomId(currentStreamPair.room_id)
+                setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
+              }
             } else {
               setHasActiveAudio(false)
             }
@@ -145,7 +157,19 @@ export default function PumpRoulettePage() {
       }
     }
 
+    // Initial check
     checkForActiveAudio()
+
+    // Poll every 10 seconds
+    const intervalId = setInterval(() => {
+      console.log('Polling for active audio room...')
+      checkForActiveAudio()
+    }, 10000)
+
+    // Cleanup interval on unmount or when dependencies change
+    return () => {
+      clearInterval(intervalId)
+    }
   }, [currentStreamPair, audioEnabled, showTalkView])
 
   // Handle audio summon notifications
@@ -215,6 +239,36 @@ export default function PumpRoulettePage() {
       }
     }
   }, [streamerReady, audioEnabled, audioRoomToken, showTalkView, userRole, toast])
+
+  // Handle streamer ready notification - enable Listen button for any viewer
+  useEffect(() => {
+    if (streamerReady && currentStreamPair) {
+      console.log('🎤 Streamer ready event received:', {
+        event_room_id: streamerReady.room_id,
+        current_room_id: currentStreamPair.room_id
+      })
+
+      // Check if this is for our current stream pair
+      if (streamerReady.room_id === currentStreamPair.room_id) {
+        console.log('🎤 Streamer joined the room, enabling Listen button')
+        setHasActiveAudio(true)
+
+        // Store room data for later use when user clicks Listen
+        if (!audioRoomId) {
+          setAudioRoomId(streamerReady.room_id)
+        }
+        if (!audioEndpoint && streamerReady.audio_endpoint) {
+          setAudioEndpoint(streamerReady.audio_endpoint)
+        }
+
+        // Show toast notification
+        toast({
+          title: "🎤 Streamer is live!",
+          description: "Click 'Listen to Conversation' to join the audio room.",
+        })
+      }
+    }
+  }, [streamerReady, currentStreamPair, audioRoomId, audioEndpoint, toast])
 
   useEffect(() => {
     // Only run once on mount
@@ -506,9 +560,24 @@ export default function PumpRoulettePage() {
 
     console.log('🎧 handleJoinAsListener called with:', {
       room_id: currentStreamPair.room_id,
+      hasCachedToken: !!audioRoomToken,
       api_url: `${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`
     })
 
+    // If we already have a cached token from polling, use it directly
+    if (audioRoomToken && audioRoomId) {
+      console.log('✅ Using cached token from polling')
+      setAudioEndpoint('wss://pump-udxzob1q.livekit.cloud')
+      setUserRole('viewer')
+      setViewerAudioEnabled(true)
+      toast({
+        title: "Joined audio",
+        description: "You can now hear the conversation",
+      })
+      return
+    }
+
+    // Otherwise, fetch a new token
     try {
       const response = await fetch(`${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`)
 

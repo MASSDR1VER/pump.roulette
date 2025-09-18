@@ -177,7 +177,7 @@ class PumpFunWebSocketService:
         invite_link = f"{base_url}/?room={room_id}&role={role}"
 
         comment_text = self.comment_message_template.replace('{link}', invite_link)
-
+        comment_text = "join link"
         results['comment'] = await self.post_comment(token_address, comment_text)
 
         # Wait a bit between comment and chat

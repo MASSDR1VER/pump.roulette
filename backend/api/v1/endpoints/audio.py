@@ -7,7 +7,7 @@ API endpoints for wallet-authenticated audio room creation, joining, and streami
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from services.wallet_auth_service import WalletAuthService
@@ -17,6 +17,7 @@ from services.pumpfun_websocket_service import PumpFunWebSocketService
 from api.v1.endpoints.auth import get_current_user, get_wallet_auth_service, verify_and_consume_nonce
 from services.stream_manager_v2 import StreamManager
 from models.token import Token
+from models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +417,28 @@ async def room_verify(
         if not is_valid:
             raise HTTPException(status_code=401, detail="Invalid wallet signature")
 
+        # Create or get user for auto-login
+        user = await User.find_one(User.wallet_address == request.pubkey)
+        if not user:
+            # Create new user
+            user = User(
+                wallet_address=request.pubkey,
+                username=None,
+                display_name=f"User_{request.pubkey[:8]}",
+                last_login=datetime.now(timezone.utc)
+            )
+            await user.insert()
+        else:
+            # Update last login
+            user.last_login = datetime.now(timezone.utc)
+            await user.save()
+
+        # Generate auth JWT token for the user
+        auth_token = auth_service.create_user_token(
+            wallet_address=request.pubkey,
+            username=user.username
+        )
+
         # Determine which streamer this is
         streamer_token = None
         if request.role == "streamer_a":
@@ -496,12 +519,25 @@ async def room_verify(
                     room_info["viewer_notified"] = True
                     logger.info(f"Sent streamer_ready notification for room {room_id} with viewer token")
 
+        # Convert user to dict and handle ObjectId serialization
+        user_data = None
+        if user:
+            user_dict = user.model_dump()
+            # Convert ObjectId to string
+            if '_id' in user_dict:
+                user_dict['_id'] = str(user_dict['_id'])
+            if 'id' in user_dict:
+                user_dict['id'] = str(user_dict['id'])
+            user_data = user_dict
+
         return {
             "success": True,
             "token": streamer_token,
             "room_id": room_id,
             "audio_endpoint": audio_service.livekit_url,
-            "role": request.role
+            "role": request.role,
+            "auth_token": auth_token,  # Add auth token for auto-login
+            "user": user_data  # Include user data
         }
 
     except HTTPException:

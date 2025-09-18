@@ -155,13 +155,21 @@ export function TalkView({ roomId, token, role, onClose, onAudioEnabled, isMuted
 
       if (verifyResult.success) {
         setVerificationState('verified')
-        // Store the token and endpoint received from backend
+        // Store the audio token and endpoint received from backend
         setAudioToken(verifyResult.token)
         setAudioEndpoint(verifyResult.audio_endpoint || LIVEKIT_ENDPOINT)
 
-        // Store auth token if returned
-        if (verifyResult.token) {
-          localStorage.setItem('auth_token', verifyResult.token)
+        // Store auth token for app-wide authentication
+        if (verifyResult.auth_token) {
+          localStorage.setItem('auth_token', verifyResult.auth_token)
+
+          // Trigger a custom event to notify the app that user logged in
+          window.dispatchEvent(new CustomEvent('auth:login', {
+            detail: {
+              token: verifyResult.auth_token,
+              user: verifyResult.user
+            }
+          }))
         }
       } else {
         setVerificationError(verifyResult.error || 'Verification failed')
