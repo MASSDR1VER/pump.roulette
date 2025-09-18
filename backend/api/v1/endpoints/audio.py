@@ -13,6 +13,7 @@ import logging
 from services.wallet_auth_service import WalletAuthService
 from services.audio_room_service import AudioRoomService
 from services.pumpfun_notification_service import PumpFunNotificationService
+from services.pumpfun_websocket_service import PumpFunWebSocketService
 from api.v1.endpoints.auth import get_current_user, get_wallet_auth_service, verify_and_consume_nonce
 from services.stream_manager_v2 import StreamManager
 from models.token import Token
@@ -182,15 +183,28 @@ async def summon_streamers(
 
         # Send pump.fun notifications to streamers if mint addresses are provided
         if request.stream_1_mint and request.stream_2_mint:
+            # Try WebSocket service first (more reliable)
             try:
-                notification_results = await notification_service.notify_both_streamers(
+                ws_service = PumpFunWebSocketService()
+                ws_results = await ws_service.notify_both_streamers(
                     stream_1_mint=request.stream_1_mint,
                     stream_2_mint=request.stream_2_mint,
                     room_id=room_data["pair_id"]
                 )
-                logger.info(f"Pump.fun notifications sent: {notification_results}")
+                logger.info(f"Pump.fun WebSocket notifications sent: {ws_results}")
             except Exception as e:
-                logger.error(f"Failed to send pump.fun notifications: {e}")
+                logger.error(f"Failed to send WebSocket notifications: {e}")
+
+                # Fallback to HTTP API if WebSocket fails
+                try:
+                    notification_results = await notification_service.notify_both_streamers(
+                        stream_1_mint=request.stream_1_mint,
+                        stream_2_mint=request.stream_2_mint,
+                        room_id=room_data["pair_id"]
+                    )
+                    logger.info(f"Pump.fun API notifications sent: {notification_results}")
+                except Exception as e2:
+                    logger.error(f"Failed to send API notifications: {e2}")
                 # Continue even if notifications fail
 
         # Send WebSocket notifications to streamers if available

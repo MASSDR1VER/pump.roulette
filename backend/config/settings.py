@@ -87,6 +87,8 @@ class Settings(BaseSettings):
 
     # Pump.fun API authentication for notifications
     PUMPFUN_AUTH_TOKEN: str = ""  # Auth token for sending pump.fun replies
+    PUMPFUN_CHAT_MESSAGE: str = "🎤 Voice battle invite! Check comments for link"
+    PUMPFUN_COMMENT_MESSAGE: str = "🎤 Join voice battle: {link}"
 
     class Config:
         """Pydantic configuration class"""

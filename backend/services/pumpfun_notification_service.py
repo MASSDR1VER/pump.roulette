@@ -43,7 +43,7 @@ class PumpFunNotificationService:
             '_ga': 'GA1.1.855120383.1746559821',
             'intercom-id-w7scljv7': '07078697-03c9-481f-9bd1-3bdc287afc19',
             'intercom-device-id-w7scljv7': 'd832200a-67df-4e81-b0b6-d323724d9f8d',
-            'auth_token': settings.PUMPFUN_AUTH_TOKEN if settings.PUMPFUN_AUTH_TOKEN else 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiN3dGVFlOWlBBSzdXYnpTUjhFaGZtb3NhRGI3alRMN3dEbldqR0FYUDY4ak4iLCJyb2xlcyI6WyJ1c2VyIl0sImlhdCI6MTc1Nzk1MTM1OCwiZXhwIjoxNzYwNTQzMzU4fQ.0IzncluaMgUAsqXF-of_GO-pIpY4o4op8-5lktQAkF4',
+            'auth_token': settings.PUMPFUN_AUTH_TOKEN if settings.PUMPFUN_AUTH_TOKEN else 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiN3dGVFlOWlBBSzdXYnpTUjhFaGZtb3NhRGI3alRMN3dEbldqR0FYUDY4ak4iLCJyb2xlcyI6WyJ1c2VyIl0sImlhdCI6MTc1ODA1NzE4MiwiZXhwIjoxNzYwNjQ5MTgyfQ.uMKSXWOI_nMhDpWHv5YgAx27p3VMdLeI0T9xpxceUTg',
             '_cfuvid': 'tOsQ8SMv0fEPK89V5ZufnoNhaORldgi3CB_5EhXXxdQ-1757985153465-0.0.1.1-604800000',
             'cf_clearance': '9btlN7v20Uswj7llI6hjPOdT4ZpENn8omNbJsWzCFAg-1757985154-1.2.1.1-PQPOrHjSaW_RuSArIVrMecYT1SDAAe2Wju0vO4OH788_gKSErFPGBhq69_AGt6nQpvmBlsxZrXVrd7B8e4fhPilwN2S75JEjPgtn2TeGE_LgzGh5_YSYhuMaR.jAUjsS0UiVNYDkbc3Duna37jH5RxNgFb.wIslqOsOMsQgcPq7PZA2BqacaZraqDAMmSS2y8T0QlhTYGI5GcOAygRPkjW8KSQ.J.ZwCimRkW13m_KM',
             '__cf_bm': 'C.kHQVKKmaHzl1PD91AaBOhwSsA2DOVkmdDqrAmL.Gs-1757985377-1.0.1.1-j2xr0cK4VWXz59asYXHR0Mm__WyXy9EhEmilEkjg3kiF_szpYl5Ni2UEk4.78611KAVVkT07YQ_T9wNQGk5KPYVaWHNU9MhvBTzHRck._oA',
@@ -169,21 +169,30 @@ class PumpFunNotificationService:
         """
         results = {}
 
-        # Notify first streamer
+        # Base URL for the application
+        base_url = "https://pump-roulette.com"
+
+        # Create specific invite links for each streamer role
+        streamer_a_link = f"{base_url}/?room={room_id}&role=streamer_a"
+        streamer_b_link = f"{base_url}/?room={room_id}&role=streamer_b"
+
+        # Notify first streamer (Streamer A)
         message_1 = (
-            f"🎙️ PumpRoulette Audio Room Created! "
-            f"You're paired with {stream_2_mint[:8]}... "
-            f"Join the conversation now! Room: {room_id[:8]}... "
-            f"https://pumproulette.com/talk/{room_id}"
+            f"🎤 You've been invited to PumpRoulette Audio!\n\n"
+            f"You're paired with {stream_2_mint[:8]}...\n\n"
+            f"Join as Streamer A:\n"
+            f"{streamer_a_link}\n\n"
+            f"🔊 Live voice chat for your token!"
         )
         results['stream_1'] = await self.send_custom_notification(stream_1_mint, message_1)
 
-        # Notify second streamer
+        # Notify second streamer (Streamer B)
         message_2 = (
-            f"🎙️ PumpRoulette Audio Room Created! "
-            f"You're paired with {stream_1_mint[:8]}... "
-            f"Join the conversation now! Room: {room_id[:8]}... "
-            f"https://pumproulette.com/talk/{room_id}"
+            f"🎤 You've been invited to PumpRoulette Audio!\n\n"
+            f"You're paired with {stream_1_mint[:8]}...\n\n"
+            f"Join as Streamer B:\n"
+            f"{streamer_b_link}\n\n"
+            f"🔊 Live voice chat for your token!"
         )
         results['stream_2'] = await self.send_custom_notification(stream_2_mint, message_2)
 
