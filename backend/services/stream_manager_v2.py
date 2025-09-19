@@ -233,31 +233,8 @@ class StreamManager:
 
         except Exception as e:
             logger.error(f"Error getting random pair: {e}")
-
-            # Return mock data as fallback
-            return {
-                "room_id": f"demo_{datetime.now(timezone.utc).timestamp()}",
-                "stream_1": {
-                    "stream_id": "demo1",
-                    "streamer_id": "demo_streamer_1",  # Add demo streamer ID
-                    "stream_url": f"{settings.PUMP_FUN_BASE_URL}/coin/demo1",
-                    "token_name": "Demo Token 1",
-                    "token_address": "demo1_address",
-                    "streamer_name": "DemoStreamer1",
-                    "viewer_count": 0,
-                    "thumbnail_url": f"{settings.PUMP_FUN_BASE_URL}/placeholder.png"
-                },
-                "stream_2": {
-                    "stream_id": "demo2",
-                    "streamer_id": "demo_streamer_2",  # Add demo streamer ID
-                    "stream_url": f"{settings.PUMP_FUN_BASE_URL}/coin/demo2",
-                    "token_name": "Demo Token 2",
-                    "token_address": "demo2_address",
-                    "streamer_name": "DemoStreamer2",
-                    "viewer_count": 0,
-                    "thumbnail_url": f"{settings.PUMP_FUN_BASE_URL}/placeholder.png"
-                }
-            }
+            # Never return mock data - raise the error instead
+            raise
 
     async def get_stream_by_mint(self, mint: str) -> Optional[Dict[str, Any]]:
         """

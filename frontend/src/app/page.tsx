@@ -4,7 +4,7 @@
 
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useStreamPair } from '@/hooks/useStreamPair'
 import { config } from '@/lib/config'
 import { useAuth } from '@/hooks/useAuth'
@@ -31,7 +31,13 @@ import {
   Search,
   TrendingUp,
   X,
-  Headphones
+  Headphones,
+  Heart,
+  MessageSquare,
+  UserPlus,
+  UserCheck,
+  AtSign,
+  MessageCircle
 } from 'lucide-react'
 
 
@@ -70,6 +76,15 @@ export default function PumpRoulettePage() {
   const [showMobileSearch, setShowMobileSearch] = useState(false)
   const [loadingRoom, setLoadingRoom] = useState(false)
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null)
+  const [selectedUser, setSelectedUser] = useState<any>(null)
+  const [showUserProfile, setShowUserProfile] = useState(false)
+  const [likedMessages, setLikedMessages] = useState<Set<string>>(new Set())
+  const [followedUsers, setFollowedUsers] = useState<Set<string>>(new Set())
+  const [mentionSearch, setMentionSearch] = useState('')
+  const [showMentionsList, setShowMentionsList] = useState(false)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   // Use WebSocket for real-time chat
   const roomId = customRoomId || streamPair?.room_id || 'default'
@@ -803,6 +818,7 @@ export default function PumpRoulettePage() {
       if (success) {
         setNewMessage('')
         setReplyingTo(null) // Clear reply state after sending
+        setShowMentionsList(false)
       } else {
         toast({
           title: "Failed to send message",
@@ -812,6 +828,122 @@ export default function PumpRoulettePage() {
       }
     }
   }
+
+  // Handle message like
+  const handleLikeMessage = (messageId: string) => {
+    const newLikedMessages = new Set(likedMessages)
+    if (newLikedMessages.has(messageId)) {
+      newLikedMessages.delete(messageId)
+    } else {
+      newLikedMessages.add(messageId)
+    }
+    setLikedMessages(newLikedMessages)
+    // TODO: Send like to backend
+  }
+
+  // Handle follow/unfollow user
+  const handleFollowUser = (userId: string) => {
+    const newFollowedUsers = new Set(followedUsers)
+    if (newFollowedUsers.has(userId)) {
+      newFollowedUsers.delete(userId)
+      toast({
+        title: "Unfollowed",
+        description: "User unfollowed successfully",
+      })
+    } else {
+      newFollowedUsers.add(userId)
+      toast({
+        title: "Followed",
+        description: "User followed successfully",
+      })
+    }
+    setFollowedUsers(newFollowedUsers)
+    // TODO: Save to backend/localStorage
+  }
+
+  // Handle username click to show profile
+  const handleUsernameClick = (msg: ChatMessage) => {
+    setSelectedUser({
+      id: msg.user_id,
+      username: msg.username,
+      profile_image: msg.profile_image,
+      wallet_address: msg.user_id
+    })
+    setShowUserProfile(true)
+  }
+
+  // Handle @ mentions
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    setNewMessage(value)
+
+    // Check for @ mentions
+    const atIndex = value.lastIndexOf('@')
+    if (atIndex !== -1) {
+      const afterAt = value.substring(atIndex + 1)
+      const spaceIndex = afterAt.indexOf(' ')
+
+      if (spaceIndex === -1) {
+        // Still typing the mention
+        setMentionSearch(afterAt)
+        setShowMentionsList(true)
+      } else {
+        setShowMentionsList(false)
+      }
+    } else {
+      setShowMentionsList(false)
+    }
+  }
+
+  // Insert mention
+  const insertMention = (username: string) => {
+    const atIndex = newMessage.lastIndexOf('@')
+    if (atIndex !== -1) {
+      const beforeAt = newMessage.substring(0, atIndex)
+      setNewMessage(`${beforeAt}@${username} `)
+      setShowMentionsList(false)
+      inputRef.current?.focus()
+    }
+  }
+
+  // Get unique users from messages for mentions
+  const uniqueUsers = Array.from(new Set(wsMessages
+    .filter(msg => !msg.is_system)
+    .map(msg => msg.username)))
+    .filter(username => mentionSearch === '' || username.toLowerCase().includes(mentionSearch.toLowerCase()))
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [wsMessages])
+
+  // Handle WebSocket errors
+  useEffect(() => {
+    if (chatError) {
+      // Check for specific error messages
+      if (chatError.includes('Rate limit exceeded')) {
+        toast({
+          title: "Rate limit exceeded",
+          description: "Please slow down your messages and try again in a moment.",
+          variant: "destructive"
+        })
+      } else if (chatError.includes('WebSocket error')) {
+        toast({
+          title: "Connection error",
+          description: chatError,
+          variant: "destructive"
+        })
+      } else {
+        toast({
+          title: "Chat error",
+          description: chatError,
+          variant: "destructive"
+        })
+      }
+    }
+  }, [chatError])
 
 
   return (
@@ -1394,85 +1526,116 @@ export default function PumpRoulettePage() {
           )}
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 min-h-0">
+          <div
+            ref={messagesContainerRef}
+            className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 min-h-0 scrollbar-hide"
+            style={{
+              scrollbarWidth: 'none',
+              msOverflowStyle: 'none',
+            }}
+          >
+            <style jsx>{`
+              .scrollbar-hide::-webkit-scrollbar {
+                display: none;
+              }
+            `}</style>
             {wsMessages.map((msg) => (
-              <div key={msg.id} className={`flex items-start gap-2.5 py-1 hover:bg-[#25262b]/30 rounded px-1 transition-colors group ${msg.is_system ? 'justify-center' : ''}`}>
-                {!msg.is_system && (
-                  <div className="relative">
+              <div key={msg.id} className={`${msg.is_system ? 'text-center py-1' : ''}`}>
+                {msg.is_system ? (
+                  <div className="text-[10px] text-gray-500 italic">
+                    {msg.content}
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2 group">
                     <img
                       src={msg.profile_image || `https://ui-avatars.com/api/?name=${msg.username}&background=666&color=fff&size=64&rounded=true`}
                       alt={msg.username}
-                      className="w-7 h-7 rounded-full flex-shrink-0 mt-0.5 border border-[#25262b] group-hover:border-[#7DE2A1] transition-colors"
+                      className="w-6 h-6 rounded-full flex-shrink-0"
                       onError={(e) => {
                         const target = e.target as HTMLImageElement
                         target.src = `https://ui-avatars.com/api/?name=${msg.username}&background=666&color=fff&size=64&rounded=true`
                       }}
                     />
-                    {/* Wallet connected indicator for real users */}
-                    {msg.user_id !== 'system' && !msg.user_id.startsWith('guest_') && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-white rounded-full border border-[#181821] flex items-center justify-center">
-                        <div className="w-1.5 h-1.5 bg-black rounded-full"></div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className={`flex-1 min-w-0 ${msg.is_system ? 'text-center' : ''}`}>
-                  {msg.is_system ? (
-                    <div className="text-xs text-gray-400 italic">
-                      {msg.content}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-baseline gap-2 flex-wrap">
-                        <span className="text-white text-sm font-semibold flex items-center gap-1">
+                    <div className="flex-1 min-w-0">
+                      {/* Message header */}
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <button
+                          onClick={() => handleUsernameClick(msg)}
+                          className="text-white text-xs font-semibold hover:text-[#7DE2A1] transition-colors cursor-pointer"
+                        >
                           {msg.username}
-                          {/* Verified badge for current user */}
-                          {user && msg.user_id === user.wallet_address && user.is_verified && (
-                            <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                            </svg>
-                          )}
-                          {/* Premium badge */}
-                          {user && msg.user_id === user.wallet_address && user.is_premium && (
-                            <span className="text-xs px-1 py-0.5 bg-gradient-to-r from-purple-500 to-pink-500 rounded text-white font-bold">
-                              PRO
-                            </span>
-                          )}
-                        </span>
-                        <span className="text-[#9ca3af] text-xs">
+                        </button>
+                        <span className="text-gray-500 text-[10px]">
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                        {/* Wallet address tooltip for current user */}
-                        {user && msg.user_id === user.wallet_address && (
-                          <span className="text-[#9ca3af] text-xs font-mono opacity-60">
-                            {user.wallet_address.slice(0, 4)}...{user.wallet_address.slice(-4)}
+                        {/* Show wallet address only on hover as tooltip */}
+                        {msg.user_id && !msg.user_id.startsWith('guest_') && !msg.user_id.startsWith('system') && (
+                          <span
+                            className="text-gray-600 text-[10px] font-mono opacity-0 group-hover:opacity-100 transition-opacity cursor-help"
+                            title={msg.user_id}
+                          >
+                            {msg.user_id.slice(0, 4)}...{msg.user_id.slice(-4)}
                           </span>
                         )}
                       </div>
-                      <p className="text-white text-sm break-words mt-0.5">{msg.content}</p>
-                      {/* Message reactions/actions for wallet users */}
-                      {isWalletConnected && (
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity mt-1 flex items-center gap-2">
+                      {/* Reply context if this message is replying to another */}
+                      {msg.reply_to && (() => {
+                        const repliedMessage = wsMessages.find(m => m.id === msg.reply_to)
+                        if (repliedMessage) {
+                          return (
+                            <div className="mb-1 pl-2 border-l-2 border-gray-600">
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-gray-500">↳ Replying to</span>
+                                <span className="text-[10px] text-gray-400 font-medium">{repliedMessage.username}</span>
+                              </div>
+                              <p className="text-[10px] text-gray-500 truncate max-w-[250px]">
+                                {repliedMessage.content}
+                              </p>
+                            </div>
+                          )
+                        }
+                        return null
+                      })()}
+                      {/* Message bubble */}
+                      <div className="bg-[#25262b] rounded-md px-2.5 py-1.5 inline-block max-w-[90%]">
+                        <p className="text-white text-xs break-words leading-relaxed">
+                          {msg.content.split(' ').map((word, i) => {
+                            if (word.startsWith('@')) {
+                              const username = word.substring(1)
+                              return (
+                                <span key={i}>
+                                  <span className="text-[#7DE2A1] font-medium">@{username}</span>{' '}
+                                </span>
+                              )
+                            }
+                            return word + ' '
+                          })}
+                        </p>
+                      </div>
+                      {/* Message actions */}
+                      {isWalletConnected && !msg.is_system && (
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity mt-1 flex items-center gap-1">
                           <button
                             onClick={() => setReplyingTo(msg)}
-                            className="text-xs text-gray-500 hover:text-white transition-colors"
+                            className="px-2 py-0.5 bg-[#25262b] hover:bg-[#2E3036] rounded-full text-[10px] text-gray-400 hover:text-white transition-all flex items-center gap-1"
                           >
+                            <MessageSquare className="h-3 w-3" />
                             Reply
                           </button>
                           <button
-                            onClick={() => {
-                              // TODO: Implement like functionality
-                              console.log('Like message:', msg.id)
-                            }}
-                            className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                            onClick={() => handleLikeMessage(msg.id)}
+                            className={`px-2 py-0.5 bg-[#25262b] hover:bg-[#2E3036] rounded-full text-[10px] transition-all flex items-center gap-1 ${
+                              likedMessages.has(msg.id) ? 'text-red-500' : 'text-gray-400 hover:text-red-400'
+                            }`}
                           >
-                            ❤️ {msg.reactions?.likes || 0}
+                            <Heart className={`h-3 w-3 ${likedMessages.has(msg.id) ? 'fill-current' : ''}`} />
+                            {(msg.reactions?.likes || 0) + (likedMessages.has(msg.id) ? 1 : 0)}
                           </button>
                         </div>
                       )}
-                    </>
-                  )}
-                </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
             {wsMessages.length === 0 && (
@@ -1484,6 +1647,8 @@ export default function PumpRoulettePage() {
                 <p className="text-gray-600 text-xs">Be the first to start the conversation!</p>
               </div>
             )}
+            {/* Scroll anchor */}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Input */}
@@ -1528,17 +1693,33 @@ export default function PumpRoulettePage() {
                     </button>
                   </div>
                 )}
+                {/* Mentions dropdown */}
+                {showMentionsList && uniqueUsers.length > 0 && (
+                  <div className="absolute bottom-full mb-1 left-0 right-0 max-h-32 overflow-y-auto bg-[#25262b] border border-[#2E3036] rounded-md shadow-lg">
+                    {uniqueUsers.slice(0, 5).map((username) => (
+                      <button
+                        key={username}
+                        onClick={() => insertMention(username)}
+                        className="w-full px-3 py-1.5 text-left text-xs text-white hover:bg-[#2E3036] transition-colors flex items-center gap-2"
+                      >
+                        <AtSign className="h-3 w-3 text-[#7DE2A1]" />
+                        {username}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <form
                   onSubmit={(e) => {
                     e.preventDefault()
                     sendMessage()
                   }}
-                  className="flex gap-2"
+                  className="flex gap-2 relative"
                 >
                   <input
+                    ref={inputRef}
                     value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder={chatConnected ? "Share your thoughts on these tokens..." : "Connecting to chat..."}
+                    onChange={handleInputChange}
+                    placeholder={chatConnected ? "Type a message... (use @ to mention)" : "Connecting..."}
                     disabled={!chatConnected}
                     className="flex-1 px-3 py-1.5 bg-[#15161B] border border-[#2E3036] rounded-sm text-sm text-white placeholder:text-gray-500 focus:border-white/50 focus:outline-none transition-colors disabled:opacity-50"
                   />
@@ -1632,6 +1813,90 @@ export default function PumpRoulettePage() {
           </div>
         </div>
       </footer>
+
+      {/* User Profile Modal */}
+      {showUserProfile && selectedUser && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setShowUserProfile(false)}>
+          <div
+            className="bg-[#181821] rounded-lg p-6 max-w-md w-full border border-[#25262b]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-white text-lg font-bold">User Profile</h2>
+              <button
+                onClick={() => setShowUserProfile(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-4 mb-6">
+              <img
+                src={selectedUser.profile_image || `https://ui-avatars.com/api/?name=${selectedUser.username}&background=666&color=fff&size=128&rounded=true`}
+                alt={selectedUser.username}
+                className="w-20 h-20 rounded-full border-2 border-[#7DE2A1]"
+              />
+              <div className="flex-1">
+                <h3 className="text-white text-xl font-semibold mb-1">{selectedUser.username}</h3>
+                <p className="text-gray-400 text-xs font-mono">
+                  {selectedUser.wallet_address?.slice(0, 8)}...{selectedUser.wallet_address?.slice(-8)}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              <div className="flex items-center justify-between p-3 bg-[#25262b] rounded-lg">
+                <span className="text-gray-400 text-sm">Messages</span>
+                <span className="text-white font-medium">
+                  {wsMessages.filter(m => m.user_id === selectedUser.id).length}
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-3 bg-[#25262b] rounded-lg">
+                <span className="text-gray-400 text-sm">Member since</span>
+                <span className="text-white font-medium">Today</span>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  handleFollowUser(selectedUser.id)
+                }}
+                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                  followedUsers.has(selectedUser.id)
+                    ? 'bg-[#25262b] text-white hover:bg-[#2E3036]'
+                    : 'bg-[#7DE2A1] text-black hover:bg-[#6dd291]'
+                }`}
+              >
+                {followedUsers.has(selectedUser.id) ? (
+                  <>
+                    <UserCheck className="h-4 w-4" />
+                    Following
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="h-4 w-4" />
+                    Follow
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setShowUserProfile(false)
+                  if (inputRef.current) {
+                    setNewMessage(`@${selectedUser.username} `)
+                    inputRef.current.focus()
+                  }
+                }}
+                className="px-4 py-2 bg-[#25262b] hover:bg-[#2E3036] text-white rounded-lg font-medium transition-all"
+              >
+                <AtSign className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

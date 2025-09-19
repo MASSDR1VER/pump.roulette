@@ -54,6 +54,7 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
   const [copied, setCopied] = useState(false)
   const [isFavorited, setIsFavorited] = useState(false)
   const [showShare, setShowShare] = useState(false)
+  const [showControls, setShowControls] = useState(false)
 
   useEffect(() => {
     // Fetch individual token for this viewer
@@ -245,7 +246,11 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
 
 
   return (
-    <div className="flex-1 bg-[#181821] relative">
+    <div
+      className="flex-1 bg-[#181821] relative"
+      onMouseEnter={() => setShowControls(true)}
+      onMouseLeave={() => setShowControls(false)}
+    >
       {/* Video container */}
       <div ref={videoContainerRef} className="absolute inset-0 w-full h-full" />
 
@@ -300,12 +305,19 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
       )}
 
       {/* Top overlay - minimal badges only */}
-      <div className="absolute top-0 left-0 right-0 p-3 flex justify-between">
+      <div className={`absolute top-0 left-0 right-0 p-3 flex justify-between transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0'}`}>
         {/* Left side - Status badges */}
-        <div className="flex items-start gap-2">
+        <div className="flex items-center gap-2">
           <div className="px-2.5 py-1 bg-[#7DE2A1] rounded text-black text-xs font-bold flex items-center gap-1.5">
             LIVE
           </div>
+          {/* Volume button moved here */}
+          <button
+            onClick={() => onMuteChange?.(!muted)}
+            className="px-2 py-1 bg-[#181821]/90 hover:bg-[#181821] backdrop-blur-sm rounded transition-all flex items-center justify-center"
+          >
+            {muted ? <VolumeX className="h-3.5 w-3.5 text-[#9ca3af]" /> : <Volume2 className="h-3.5 w-3.5 text-[#7DE2A1]" />}
+          </button>
           {stream.is_trending && (
             <div className="px-2.5 py-1 bg-orange-500 rounded text-white text-xs font-bold flex items-center gap-1">
               <Flame className="h-3 w-3" />
@@ -323,23 +335,6 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
           {/* Right side - Action buttons */}
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
-              onClick={handleFavorite}
-              className={`p-2 ${isFavorited ? 'bg-red-500/20 text-red-500' : 'bg-[#181821]/90 text-white'} hover:bg-[#181821] backdrop-blur-sm rounded-lg transition-all`}
-            >
-              <Heart className={`h-4 w-4 ${isFavorited ? 'fill-current' : ''}`} />
-            </button>
-            <button
-              onClick={handleShare}
-              className="p-2 bg-[#181821]/90 hover:bg-[#181821] text-white backdrop-blur-sm rounded-lg transition-all relative"
-            >
-              <Share2 className="h-4 w-4" />
-              {showShare && (
-                <span className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-[#7DE2A1] text-black text-xs px-2 py-1 rounded whitespace-nowrap">
-                  Link copied!
-                </span>
-              )}
-            </button>
-            <button
               onClick={handleOpenPumpFun}
               className="px-3 py-1.5 bg-[#7DE2A1] hover:bg-[#6dd291] text-black rounded-lg font-semibold text-xs flex items-center gap-1.5 transition-all"
             >
@@ -350,7 +345,7 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
       </div>
 
       {/* Bottom overlay with stream info */}
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3">
+      <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0'}`}>
         {/* Stream info bar */}
         <div className="mb-2">
           <div className="flex items-center gap-3">
@@ -378,77 +373,70 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
                 by {stream.creator_username || stream.streamer_name.slice(0, 12)}...
               </div>
             </div>
-            {/* Social links */}
-            <div className="flex items-center gap-1.5">
-              {stream.twitter && (
-                <a
-                  href={stream.twitter}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-1.5 bg-black/60 hover:bg-black/80 rounded text-[#9ca3af] hover:text-[#7DE2A1] transition-all"
-                >
-                  <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-                  </svg>
-                </a>
-              )}
-              {stream.telegram && (
-                <a
-                  href={stream.telegram}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-1.5 bg-black/60 hover:bg-black/80 rounded text-[#9ca3af] hover:text-[#7DE2A1] transition-all"
-                >
-                  <Send className="h-3 w-3" />
-                </a>
-              )}
-            </div>
           </div>
         </div>
 
-        <div className="flex items-end justify-between">
-          {/* Left side - Controls */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => onMuteChange?.(!muted)}
-              className="p-2 bg-[#181821]/90 hover:bg-[#181821] backdrop-blur-sm rounded-lg transition-all"
-            >
-              {muted ? <VolumeX className="h-4 w-4 text-[#9ca3af]" /> : <Volume2 className="h-4 w-4 text-[#7DE2A1]" />}
-            </button>
-          </div>
+        {/* Stats row - CA, viewer count, and MCap on same line */}
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <button
+            onClick={handleCopyAddress}
+            className="px-2.5 py-1 bg-[#181821]/90 hover:bg-[#181821] backdrop-blur-sm rounded-lg flex items-center gap-1.5 transition-all group"
+          >
+            <Copy className="h-3 w-3 text-[#9ca3af] group-hover:text-[#7DE2A1]" />
+            <span className="text-xs font-mono text-[#9ca3af] group-hover:text-white">
+              {copied ? 'Copied!' : `${stream.token_address.slice(0, 4)}...${stream.token_address.slice(-4)}`}
+            </span>
+          </button>
 
-          {/* Right side - Stats and address */}
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex items-center gap-2">
-              <div className="px-2.5 py-1 bg-[#181821]/90 backdrop-blur-sm rounded-lg flex items-center gap-1.5">
-                <Users className="h-3.5 w-3.5 text-[#7DE2A1]" />
-                <span className="text-xs font-medium text-white">{stream.viewer_count}</span>
-              </div>
-              {stream.usd_market_cap && (
-                <div className="px-2.5 py-1 bg-[#181821]/90 backdrop-blur-sm rounded-lg">
-                  <span className="text-xs font-medium text-white">
-                    MCap: {formatMarketCap(stream.usd_market_cap)}
-                  </span>
-                </div>
-              )}
-              {stream.holders && (
-                <div className="px-2.5 py-1 bg-[#181821]/90 backdrop-blur-sm rounded-lg">
-                  <span className="text-xs font-medium text-[#9ca3af]">
-                    {stream.holders} holders
-                  </span>
-                </div>
-              )}
+          <div className="flex items-center gap-2">
+            <div className="px-2.5 py-1 bg-[#181821]/90 backdrop-blur-sm rounded-lg flex items-center gap-1.5">
+              <Users className="h-3.5 w-3.5 text-[#7DE2A1]" />
+              <span className="text-xs font-medium text-white">{stream.viewer_count}</span>
             </div>
-            <button
-              onClick={handleCopyAddress}
-              className="px-2.5 py-1 bg-[#181821]/90 hover:bg-[#181821] backdrop-blur-sm rounded-lg flex items-center gap-1.5 transition-all group"
-            >
-              <Copy className="h-3 w-3 text-[#9ca3af] group-hover:text-[#7DE2A1]" />
-              <span className="text-xs font-mono text-[#9ca3af] group-hover:text-white">
-                {copied ? 'Copied!' : `${stream.token_address.slice(0, 4)}...${stream.token_address.slice(-4)}`}
-              </span>
-            </button>
+            {stream.usd_market_cap && (
+              <div className="px-2.5 py-1 bg-[#181821]/90 backdrop-blur-sm rounded-lg">
+                <span className="text-xs font-medium text-white">
+                  MCap: {formatMarketCap(stream.usd_market_cap)}
+                </span>
+              </div>
+            )}
           </div>
+        </div>
+
+        {/* Social links at the bottom */}
+        <div className="flex items-center justify-center gap-2">
+          {stream.twitter && (
+            <a
+              href={stream.twitter}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 bg-black/60 hover:bg-black/80 rounded text-[#9ca3af] hover:text-[#7DE2A1] transition-all"
+            >
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+            </a>
+          )}
+          {stream.telegram && (
+            <a
+              href={stream.telegram}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 bg-black/60 hover:bg-black/80 rounded text-[#9ca3af] hover:text-[#7DE2A1] transition-all"
+            >
+              <Send className="h-3 w-3" />
+            </a>
+          )}
+          {stream.website && (
+            <a
+              href={stream.website}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 bg-black/60 hover:bg-black/80 rounded text-[#9ca3af] hover:text-[#7DE2A1] transition-all"
+            >
+              <Globe className="h-3 w-3" />
+            </a>
+          )}
         </div>
       </div>
     </div>

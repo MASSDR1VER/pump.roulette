@@ -171,7 +171,12 @@ export function useWebSocket(roomId: string, streamPair?: any) {
 
             case 'error':
               console.error('WebSocket error:', data.message)
-              setError(data.message || 'Unknown error')
+              // Check for rate limit error specifically
+              if (data.message && (data.message.includes('Rate limit') || data.message.includes('rate limit'))) {
+                setError('Rate limit exceeded. Please slow down.')
+              } else {
+                setError(data.message || 'Unknown error')
+              }
               break
 
             case 'audio_summon':
@@ -255,6 +260,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
   const sendMessage = useCallback((content: string, replyTo?: string) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       console.error('WebSocket not connected, state:', socket?.readyState)
+      setError('WebSocket not connected')
       return false
     }
 
@@ -270,9 +276,12 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       }
       console.log('Sending message:', message)
       socket.send(JSON.stringify(message))
+      // Clear any previous error on successful send
+      setError(null)
       return true
     } catch (err) {
       console.error('Failed to send message:', err)
+      setError('Failed to send message')
       return false
     }
   }, [socket])
