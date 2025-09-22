@@ -122,6 +122,27 @@ export function useWebSocket(roomId: string, streamPair?: any) {
             timestamp: new Date().toISOString()
           }
           localStorage.setItem(`room_streams_${roomId}`, JSON.stringify(roomStreamData))
+
+          // Also store full stream data in backend
+          if (currentStreamPair.room_id) {
+            fetch(`${config.api.baseUrl}/api/v1/chat/room/create`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                room_id: currentStreamPair.room_id || roomId,
+                stream_1: currentStreamPair.stream_1,
+                stream_2: currentStreamPair.stream_2
+              })
+            }).then(response => {
+              if (response.ok) {
+                console.log('Stored full stream data in backend for room:', roomId)
+              }
+            }).catch(error => {
+              console.error('Failed to store stream data in backend:', error)
+            })
+          }
         }
       } else {
         // No stream pair provided - joining existing room

@@ -47,26 +47,47 @@ export function useStreamPair() {
 
       const data = await response.json()
 
-      // Verify both streams are actually live before setting
-      if (data.stream_1 && data.stream_2) {
-        try {
-          const [verify1, verify2] = await Promise.all([
-            fetch(`${API_BASE_URL}/streams/verify/${data.stream_1.stream_id}`).then(r => r.json()),
-            fetch(`${API_BASE_URL}/streams/verify/${data.stream_2.stream_id}`).then(r => r.json())
-          ])
+      // API already returns live streams, no need to verify
+      console.log('Full API response:', data)
 
-          if (!verify1.is_live || !verify2.is_live) {
-            console.warn('One or both streams are not live, fetching new pair')
-            // Recursively fetch new pair if either stream is not live
-            return fetchNewPair()
-          }
-        } catch (verifyError) {
-          console.warn('Failed to verify streams, using them anyway:', verifyError)
-        }
+      if (data.stream_1 && data.stream_2) {
+        console.log('Stream pair received:', {
+          room_id: data.room_id,
+          stream1: data.stream_1.token_name,
+          stream2: data.stream_2.token_name
+        })
       }
 
       setStreamPair(data)
       setError(null)
+
+      // Store the full stream data in the backend for this room
+      if (data.room_id && data.stream_1 && data.stream_2) {
+        try {
+          const storeResponse = await fetch(`${API_BASE_URL}/chat/room/create`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              room_id: data.room_id,
+              stream_1: data.stream_1,
+              stream_2: data.stream_2
+            })
+          })
+
+          if (storeResponse.ok) {
+            const storeResult = await storeResponse.json()
+            console.log('Stored full stream data in backend:', storeResult)
+          } else {
+            console.warn('Failed to store stream data in backend:', storeResponse.status)
+          }
+        } catch (storeError) {
+          console.error('Error storing stream data in backend:', storeError)
+          // Don't fail the main operation if storage fails
+        }
+      }
+
       return true
     } catch (err) {
       console.error('Error fetching stream pair:', err)

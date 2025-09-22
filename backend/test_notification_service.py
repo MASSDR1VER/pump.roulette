@@ -58,6 +58,8 @@ async def test_notification_service():
 
         print()
 
+        
+
         # Wait a bit between messages
         await asyncio.sleep(2)
 

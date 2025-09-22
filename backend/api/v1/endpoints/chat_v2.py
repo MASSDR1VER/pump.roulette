@@ -75,29 +75,43 @@ async def get_active_rooms():
 
         # Get all room stats
         all_stats = websocket_manager.get_all_stats()
+        print(f"all stats: {all_stats}")
 
         # Enhance room data with full stream information
         enhanced_rooms = []
         for room in all_stats.get("rooms", []):
             if room:
-                # Check if stream_pair exists and has full data
-                if room.get("stream_pair"):
+                room_id = room.get("room_id")
+
+                # Try to get full stream data from persistent storage
+                if room_id and room_id in websocket_manager.room_stream_pairs:
+                    stored_pair = websocket_manager.room_stream_pairs[room_id]
+
+                    # If we have full stream data, use it
+                    if isinstance(stored_pair, dict) and "stream_1" in stored_pair and "stream_2" in stored_pair:
+                        room["stream_pair"] = stored_pair
+                        logger.info(f"Using full stream data for room {room_id}")
+                    # If it's a tuple, convert to basic format
+                    elif isinstance(stored_pair, tuple) and len(stored_pair) == 2:
+                        room["stream_pair"] = {
+                            "stream_1": {"token_address": stored_pair[0]},
+                            "stream_2": {"token_address": stored_pair[1]}
+                        }
+
+                # If stream_pair exists in room data
+                elif room.get("stream_pair"):
                     # If it's already full data (dict with stream_1/stream_2), use as is
                     if isinstance(room["stream_pair"], dict) and "stream_1" in room["stream_pair"]:
-                        enhanced_rooms.append(room)
-                    # If it's a tuple (token addresses), skip for now
-                    # In production, you'd fetch full data from token addresses
+                        # Already has full data, keep it
+                        pass
+                    # If it's a tuple (token addresses), convert to basic format
                     elif isinstance(room["stream_pair"], (list, tuple)):
-                        # For now, just include basic room info
                         room["stream_pair"] = {
                             "stream_1": {"token_address": room["stream_pair"][0] if len(room["stream_pair"]) > 0 else None},
                             "stream_2": {"token_address": room["stream_pair"][1] if len(room["stream_pair"]) > 1 else None}
                         }
-                        enhanced_rooms.append(room)
-                    else:
-                        enhanced_rooms.append(room)
-                else:
-                    enhanced_rooms.append(room)
+
+                enhanced_rooms.append(room)
 
         return {
             "success": True,
