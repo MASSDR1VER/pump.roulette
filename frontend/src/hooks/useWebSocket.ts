@@ -11,6 +11,7 @@ export interface ChatMessage {
   timestamp: string
   is_system?: boolean
   profile_image?: string
+  bio?: string
   reply_to?: string
   reactions?: {
     likes: number
@@ -94,13 +95,23 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       if (currentUser && currentIsWalletConnected && currentUser.wallet_address && !currentUser.wallet_address.startsWith('guest_')) {
         wsUrl.searchParams.set('user_id', currentUser.wallet_address)
         wsUrl.searchParams.set('username', currentUser.display_name || currentUser.username || currentUser.wallet_address.slice(0, 8))
-        wsUrl.searchParams.set('profile_image', 'https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=93&img-dpr=2&img-onerror=redirect')
+
+        // Use actual user profile image or default
+        const profileImage = currentUser.profile_image ||
+          `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.display_name || currentUser.username || 'User')}&background=666&color=fff&size=128&rounded=true`
+        wsUrl.searchParams.set('profile_image', profileImage)
+
+        // Also send bio if available
+        if (currentUser.bio) {
+          wsUrl.searchParams.set('bio', currentUser.bio)
+        }
+
         console.log('Connecting as authenticated user:', currentUser.display_name || currentUser.username, 'with wallet:', currentUser.wallet_address)
       } else {
         // Guest user
         const guestName = `Guest_${Date.now().toString().slice(-6)}`
         wsUrl.searchParams.set('username', guestName)
-        wsUrl.searchParams.set('profile_image', 'https://pump.mypinata.cloud/ipfs/QmeSzchzEPqCU1jwTnsipwcBAeH7S4bmVvFGfF65iA1BY1?img-width=93&img-dpr=2&img-onerror=redirect')
+        wsUrl.searchParams.set('profile_image', `https://ui-avatars.com/api/?name=${encodeURIComponent(guestName)}&background=666&color=fff&size=128&rounded=true`)
         console.log('Connecting as guest:', guestName, '- user:', currentUser, 'isWalletConnected:', currentIsWalletConnected)
       }
 
@@ -315,6 +326,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
 
   // Track previous user state to detect authentication changes
   const prevUserRef = useRef<string | undefined>()
+  const prevRoomRef = useRef<string | undefined>()
   const connectTimeoutRef = useRef<NodeJS.Timeout>()
   const hasInitializedRef = useRef(false)
 
@@ -326,20 +338,29 @@ export function useWebSocket(roomId: string, streamPair?: any) {
 
     const currentUserId = user?.wallet_address
     const prevUserId = prevUserRef.current
+    const prevRoomId = prevRoomRef.current
 
-    console.log('WebSocket useEffect triggered - roomId:', roomId, 'currentUser:', currentUserId, 'prevUser:', prevUserId, 'connected:', isConnected)
+    console.log('WebSocket useEffect triggered - roomId:', roomId, 'prevRoomId:', prevRoomId, 'currentUser:', currentUserId, 'prevUser:', prevUserId, 'connected:', isConnected)
 
-    // Check if user authentication has changed
+    // Check if room or user has changed
+    const roomChanged = prevRoomId !== undefined && roomId !== prevRoomId
     const userChanged = prevUserId !== undefined && currentUserId !== prevUserId
 
-    if (userChanged) {
-      console.log('User authentication changed, will reconnect WebSocket')
+    if (roomChanged || userChanged) {
+      console.log('Room or user changed, will reconnect WebSocket', { roomChanged, userChanged })
       prevUserRef.current = currentUserId
+      prevRoomRef.current = roomId
+
+      // Clear messages when changing rooms
+      if (roomChanged) {
+        setMessages([])
+        setUserCount(0)
+      }
 
       // Disconnect existing socket if any
       if (socket) {
-        console.log('Disconnecting existing socket to reconnect with new user info')
-        socket.close(1000, 'User authentication changed')
+        console.log('Disconnecting existing socket to reconnect')
+        socket.close(1000, roomChanged ? 'Room changed' : 'User authentication changed')
         setSocket(null)
         setIsConnected(false)
       }
@@ -355,7 +376,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       // Connect after a small delay
       connectTimeoutRef.current = setTimeout(() => {
         if (!isConnected && !isConnecting.current) {
-          console.log('Connecting WebSocket with user:', currentUserId || 'guest')
+          console.log('Connecting WebSocket with user:', currentUserId || 'guest', 'to room:', roomId)
           connect()
         }
       }, hasInitializedRef.current ? 500 : 100) // Longer delay for reconnects
@@ -363,9 +384,12 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       hasInitializedRef.current = true
     }
 
-    // Update the prev user ref
+    // Update the prev refs
     if (prevUserId === undefined) {
       prevUserRef.current = currentUserId
+    }
+    if (prevRoomId === undefined) {
+      prevRoomRef.current = roomId
     }
 
     return () => {

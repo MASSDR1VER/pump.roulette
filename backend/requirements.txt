@@ -43,3 +43,4 @@ livekit-api>=1.0.5
 
 # WebSocket client for pump.fun chat
 websocket-client==1.7.0
+aiofiles

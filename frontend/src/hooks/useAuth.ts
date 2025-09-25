@@ -259,6 +259,41 @@ export function useAuth() {
     setError(null)
   }, [])
 
+  const updateProfile = useCallback(async (profileData: { username?: string; bio?: string; profile_image?: string }) => {
+    const token = localStorage.getItem('auth_token')
+    if (!token) {
+      throw new Error('Not authenticated')
+    }
+
+    try {
+      const response = await fetch(`${config.api.baseUrl}/api/v1/auth/wallet/profile`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(profileData)
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to update profile')
+      }
+
+      const data = await response.json()
+
+      if (data.success && data.user) {
+        setUser(data.user)
+        return data.user
+      } else {
+        throw new Error('Failed to update profile')
+      }
+    } catch (error) {
+      console.error('Profile update error:', error)
+      throw error
+    }
+  }, [])
+
   return {
     user,
     isConnecting,
@@ -266,6 +301,7 @@ export function useAuth() {
     connectWallet,
     loginAsGuest,
     logout,
+    updateProfile,
     isAuthenticated: !!user,
     isWalletConnected  // Use the computed value from above
   }

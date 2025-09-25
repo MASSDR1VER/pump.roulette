@@ -6,6 +6,7 @@ Manages Pump.fun stream selection using real data from PumpFunClient.
 
 import asyncio
 import random
+import json
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone
 import logging
@@ -34,6 +35,13 @@ class StreamManager:
         )
         self.livekit_client = LiveKitClient()
         self.is_initialized = False
+        self.recent_pairs = []  # Track recent pairs to avoid repetition
+        self.max_recent_pairs = 5  # Keep track of last 5 pairs
+
+        # Redis configuration (optional - can be None)
+        self.redis_client = None  # Will be set up if Redis is available
+        self.recent_pairs_key = "stream_manager:recent_pairs"
+        self.pair_ttl = 3600  # 1 hour TTL for pairs
 
     async def initialize(self) -> None:
         """
@@ -109,6 +117,68 @@ class StreamManager:
             logger.error(f"Error fetching active streams: {e}")
             return []
 
+    async def _get_recent_pairs(self) -> List[List[str]]:
+        """Get recent pairs from Redis (shared across instances)."""
+        if not self.redis_client:
+            return []
+
+        try:
+            # Get all recent pairs from Redis sorted set
+            pairs_data = await self.redis_client.zrange(
+                self.recent_pairs_key,
+                0,
+                -1,
+                withscores=False
+            )
+
+            recent_pairs = []
+            for pair_json in pairs_data:
+                try:
+                    pair = json.loads(pair_json)
+                    recent_pairs.append(pair)
+                except:
+                    pass
+
+            # Clean up old entries (older than TTL)
+            cutoff_time = datetime.now(timezone.utc).timestamp() - self.pair_ttl
+            await self.redis_client.zremrangebyscore(
+                self.recent_pairs_key,
+                0,
+                cutoff_time
+            )
+
+            return recent_pairs
+        except Exception as e:
+            logger.error(f"Error getting recent pairs from Redis: {e}")
+            return []
+
+    async def _add_recent_pair(self, mint1: str, mint2: str) -> None:
+        """Add a pair to recent pairs in Redis."""
+        if not self.redis_client:
+            return
+
+        try:
+            pair = [mint1, mint2]
+            pair_json = json.dumps(pair)
+            timestamp = datetime.now(timezone.utc).timestamp()
+
+            # Add to Redis sorted set with timestamp as score
+            await self.redis_client.zadd(
+                self.recent_pairs_key,
+                {pair_json: timestamp}
+            )
+
+            # Keep only the most recent N pairs
+            await self.redis_client.zremrangebyrank(
+                self.recent_pairs_key,
+                0,
+                -(self.max_recent_pairs + 1)
+            )
+
+            logger.info(f"Added pair to Redis: {mint1[:8]}...{mint2[:8]}")
+        except Exception as e:
+            logger.error(f"Error adding recent pair to Redis: {e}")
+
     async def get_random_pair(self) -> Optional[Dict[str, Any]]:
         """
         Get a random pair of active token streams.
@@ -117,25 +187,132 @@ class StreamManager:
             Optional[Dict[str, Any]]: Stream pair data or None if not enough streams
         """
         try:
-            # Get ONLY tokens with live streams (is_currently_live = true)
-            logger.info("Fetching live streaming tokens...")
-            live_streaming_tokens = await self.pump_client.get_live_streaming_tokens(limit=50)
+            # Import at the top of the function
+            from services.pumpfun_chat_client import PumpFunChatClient
+            import random
 
-            logger.info(f"Got {len(live_streaming_tokens)} live streaming tokens")
+            # First, try to get active livestreams from API
+            logger.info("Fetching active livestreams from Pump.fun API...")
+            active_livestreams = await PumpFunChatClient.fetch_active_livestreams()
+
+            # Log detailed info about available streams
+            logger.info(f"API returned {len(active_livestreams)} active livestreams")
+            if active_livestreams:
+                logger.info(f"Stream names: {[s.get('name', 'Unknown')[:20] for s in active_livestreams[:10]]}")
+
+            if len(active_livestreams) >= 2:
+                logger.info(f"Using {len(active_livestreams)} active livestreams from API")
+
+                # Try to find 2 valid streams with retry logic
+                max_retries = 5
+                for attempt in range(max_retries):
+                    # Get recent pairs from Redis
+                    recent_pairs = await self._get_recent_pairs()
+
+                    # Filter out recently used streams
+                    available_streams = active_livestreams.copy()
+
+                    # Log recent pairs for debugging
+                    logger.info(f"Recent pairs from Redis: {len(recent_pairs)} pairs")
+                    if recent_pairs:
+                        logger.debug(f"Recent pair mints: {recent_pairs}")
+
+                    # Remove streams that were in recent pairs
+                    initial_count = len(available_streams)
+                    for recent_pair in recent_pairs:
+                        available_streams = [s for s in available_streams
+                                           if s.get('mint') not in recent_pair]
+
+                    filtered_count = initial_count - len(available_streams)
+                    logger.info(f"Filtered out {filtered_count} recently used streams")
+
+                    # If not enough streams after filtering, use all streams
+                    if len(available_streams) < 2:
+                        logger.info(f"Only {len(available_streams)} streams after filtering, using all {len(active_livestreams)} available streams")
+                        available_streams = active_livestreams
+
+                    # Randomly select 2 streams
+                    selected = random.sample(available_streams, min(2, len(available_streams)))
+
+                    # Validate both streams are actually active
+                    valid_streams = []
+                    for stream_data in selected:
+                        mint = stream_data.get('mint')
+                        if mint:
+                            # Validate stream with LiveKit
+                            is_valid = await self.livekit_client.validate_stream_active(mint)
+                            if is_valid:
+                                valid_streams.append(stream_data)
+                                logger.info(f"✅ Validated active stream: {stream_data.get('name')} ({mint})")
+                            else:
+                                logger.warning(f"❌ Stream validation failed: {stream_data.get('name')} ({mint})")
+
+                    # If we have 2 valid streams, try to build a pair
+                    if len(valid_streams) == 2:
+                        token1_data = valid_streams[0]
+                        token2_data = valid_streams[1]
+
+                        # Generate stream data from API response
+                        pair_data = await self._build_stream_pair_from_api(token1_data, token2_data)
+
+                        # If pair is valid (no duplicate rooms), return it
+                        if pair_data:
+                            logger.info(f"✅ Successfully created valid stream pair on attempt {attempt + 1}")
+
+                            # Track this pair in Redis to avoid repetition
+                            await self._add_recent_pair(
+                                token1_data.get('mint'),
+                                token2_data.get('mint')
+                            )
+
+                            return pair_data
+                        else:
+                            logger.warning(f"⚠️ Attempt {attempt + 1}: Streams had duplicate room IDs, retrying with different streams...")
+                            # Continue to next iteration to select different streams
+                            continue
+
+                    logger.warning(f"Attempt {attempt + 1}: Only found {len(valid_streams)} valid streams, retrying...")
+
+            # Fallback to database tokens (less reliable)
+            logger.info("API failed or insufficient streams, falling back to database tokens...")
+            live_streaming_tokens = await self.pump_client.get_live_streaming_tokens(limit=100)  # Increase limit
+
+            logger.info(f"Got {len(live_streaming_tokens)} live streaming tokens from database")
+            if live_streaming_tokens:
+                logger.info(f"Token names from DB: {[t.name[:20] for t in live_streaming_tokens[:10]]}")
 
             if len(live_streaming_tokens) < 2:
                 logger.warning(f"Not enough live streaming tokens: {len(live_streaming_tokens)}")
-                # Log the tokens we did find for debugging
-                for token in live_streaming_tokens:
-                    logger.info(f"Available token: {token.name} (live: {token.is_currently_live})")
-                # Don't fallback to non-live tokens, just return None
                 return None
 
+            # Try to avoid recently used tokens in DB fallback too
+            available_tokens = live_streaming_tokens
+
+            # Get recent pairs from Redis for DB fallback filtering
+            recent_pairs = await self._get_recent_pairs()
+
+            # Filter out recent pairs from DB tokens
+            if recent_pairs:
+                filtered_tokens = []
+                for token in live_streaming_tokens:
+                    mint_in_recent = False
+                    for recent_pair in recent_pairs:
+                        if token.mint in recent_pair:
+                            mint_in_recent = True
+                            break
+                    if not mint_in_recent:
+                        filtered_tokens.append(token)
+
+                if len(filtered_tokens) >= 2:
+                    logger.info(f"Filtered DB tokens: {len(filtered_tokens)} available after removing recent")
+                    available_tokens = filtered_tokens
+                else:
+                    logger.info(f"Not enough filtered tokens ({len(filtered_tokens)}), using all {len(live_streaming_tokens)}")
+
             # Select two random live streaming tokens
-            import random
-            selected = random.sample(live_streaming_tokens, 2)
+            selected = random.sample(available_tokens, 2)
             token_pair = (selected[0], selected[1])
-            logger.info(f"✅ Selected live streams: {selected[0].name} & {selected[1].name}")
+            logger.info(f"✅ Selected live streams from DB: {selected[0].name} & {selected[1].name}")
 
             if not token_pair:
                 logger.warning("Not enough active tokens for pairing")
@@ -147,14 +324,47 @@ class StreamManager:
             stream_url_1 = await self.pump_client.get_token_stream_url(token1.mint)
             stream_url_2 = await self.pump_client.get_token_stream_url(token2.mint)
 
-            # Get LiveKit info for live streams
+            # Get LiveKit info for live streams - ENSURE NO MIXING
             livekit_info_1 = None
             livekit_info_2 = None
 
+            # Process stream 1
             if token1.is_currently_live:
-                livekit_info_1 = await self.livekit_client.parse_stream_info(token1.model_dump())
+                token1_data = token1.model_dump()
+                logger.info(f"Processing stream 1: {token1.name} ({token1.mint[:8]}...)")
+                livekit_info_1 = await self.livekit_client.parse_stream_info(token1_data)
+                if livekit_info_1:
+                    logger.info(f"Stream 1 LiveKit info: room={livekit_info_1.get('room_id')}, mint={livekit_info_1.get('mint')[:8]}...")
+
+            # Process stream 2
             if token2.is_currently_live:
-                livekit_info_2 = await self.livekit_client.parse_stream_info(token2.model_dump())
+                token2_data = token2.model_dump()
+                logger.info(f"Processing stream 2: {token2.name} ({token2.mint[:8]}...)")
+                livekit_info_2 = await self.livekit_client.parse_stream_info(token2_data)
+                if livekit_info_2:
+                    logger.info(f"Stream 2 LiveKit info: room={livekit_info_2.get('room_id')}, mint={livekit_info_2.get('mint')[:8]}...")
+
+            # Validate we have different streams with different rooms
+            if livekit_info_1 and livekit_info_2:
+                room1 = livekit_info_1.get('room_id')
+                room2 = livekit_info_2.get('room_id')
+
+                # Check if rooms are the same
+                if room1 == room2:
+                    logger.error(f"❌ CRITICAL: Both streams have same room_id: {room1}")
+                    logger.error(f"Stream 1: {token1.name} ({token1.mint[:8]}...) -> Room: {room1}")
+                    logger.error(f"Stream 2: {token2.name} ({token2.mint[:8]}...) -> Room: {room2}")
+                    # Mark this as invalid pair and return None to trigger retry
+                    return None
+
+                # Additional validation: Check if mint addresses in room IDs match the tokens
+                if room1 and token1.mint not in room1:
+                    logger.warning(f"⚠️ Room ID mismatch for stream 1: Token {token1.mint[:8]} not in room {room1}")
+                if room2 and token2.mint not in room2:
+                    logger.warning(f"⚠️ Room ID mismatch for stream 2: Token {token2.mint[:8]} not in room {room2}")
+
+            # Add this pair to Redis to avoid repetition
+            await self._add_recent_pair(token1.mint, token2.mint)
 
             # Create response format
             return {
@@ -452,6 +662,77 @@ class StreamManager:
         except Exception as e:
             logger.error(f"Error getting custom pair: {e}")
             return None
+
+    async def _build_stream_pair_from_api(self, token1_data: Dict, token2_data: Dict) -> Dict[str, Any]:
+        """
+        Build stream pair response from API data.
+
+        Args:
+            token1_data: First token data from API
+            token2_data: Second token data from API
+
+        Returns:
+            Dict with stream pair information
+        """
+        try:
+            # Generate room ID
+            room_id = f"{token1_data['mint'][:8]}_{token2_data['mint'][:8]}"
+
+            # Get LiveKit info for both streams - ENSURE SEPARATE PROCESSING
+            logger.info(f"Building stream pair from API - Token1: {token1_data.get('name')} ({token1_data['mint'][:8]}...)")
+            livekit_info_1 = await self.livekit_client.parse_stream_info(token1_data)
+
+            logger.info(f"Building stream pair from API - Token2: {token2_data.get('name')} ({token2_data['mint'][:8]}...)")
+            livekit_info_2 = await self.livekit_client.parse_stream_info(token2_data)
+
+            # Validate different rooms
+            if livekit_info_1 and livekit_info_2:
+                if livekit_info_1.get('room_id') == livekit_info_2.get('room_id'):
+                    logger.error(f"❌ Stream pair has same room_id: {livekit_info_1.get('room_id')}")
+                    raise Exception("Both streams have same room_id")
+
+            # Build response
+            return {
+                "room_id": room_id,
+                "stream_1": {
+                    "stream_id": token1_data['mint'],
+                    "streamer_id": token1_data.get('creator', ''),
+                    "stream_url": f"https://pump.fun/coin/{token1_data['mint']}",
+                    "token_name": token1_data.get('name', 'Unknown'),
+                    "token_address": token1_data['mint'],
+                    "streamer_name": token1_data.get('creator_username') or token1_data.get('creator', '')[:8] + '...',
+                    "viewer_count": token1_data.get('num_participants', 0),
+                    "thumbnail_url": token1_data.get('image_uri', ''),
+                    "is_live": True,  # We know it's live from validation
+                    "room_id": livekit_info_1.get("room_id") if livekit_info_1 else None,
+                    "access_token": livekit_info_1.get("access_token") if livekit_info_1 else None,
+                    "market_cap": token1_data.get('market_cap', 0),
+                    "usd_market_cap": token1_data.get('usd_market_cap', 0),
+                    "symbol": token1_data.get('symbol', 'TOKEN'),
+                    "description": token1_data.get('description', None),
+                },
+                "stream_2": {
+                    "stream_id": token2_data['mint'],
+                    "streamer_id": token2_data.get('creator', ''),
+                    "stream_url": f"https://pump.fun/coin/{token2_data['mint']}",
+                    "token_name": token2_data.get('name', 'Unknown'),
+                    "token_address": token2_data['mint'],
+                    "streamer_name": token2_data.get('creator_username') or token2_data.get('creator', '')[:8] + '...',
+                    "viewer_count": token2_data.get('num_participants', 0),
+                    "thumbnail_url": token2_data.get('image_uri', ''),
+                    "is_live": True,  # We know it's live from validation
+                    "room_id": livekit_info_2.get("room_id") if livekit_info_2 else None,
+                    "access_token": livekit_info_2.get("access_token") if livekit_info_2 else None,
+                    "market_cap": token2_data.get('market_cap', 0),
+                    "usd_market_cap": token2_data.get('usd_market_cap', 0),
+                    "symbol": token2_data.get('symbol', 'TOKEN'),
+                    "description": token2_data.get('description', None),
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Error building stream pair from API data: {e}")
+            raise
 
     def get_stats(self) -> Dict[str, Any]:
         """

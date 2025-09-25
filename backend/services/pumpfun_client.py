@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Callable
 import socketio
 from models.token import Token
-from models.trade import Trade
 from beanie import init_beanie
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -95,8 +94,11 @@ class PumpFunClient:
             # Initialize Beanie with document models
             await init_beanie(
                 database=database,
-                document_models=[Token, Trade]
+                document_models=[Token]
             )
+
+            # Clear all tokens on startup for fresh data
+            await self.clear_all_tokens()
 
             logger.info("MongoDB initialized successfully")
         except Exception as e:
@@ -125,6 +127,17 @@ class PumpFunClient:
         except Exception as e:
             logger.error(f"Connection failed: {e}")
             raise
+
+    async def clear_all_tokens(self):
+        """Clear all tokens from database on startup for fresh data."""
+        try:
+            # Delete all tokens from database
+            deleted_count = await Token.delete_all()
+            # Clear in-memory cache
+            self.active_tokens.clear()
+            logger.info(f"Cleared {deleted_count} tokens from database for fresh start")
+        except Exception as e:
+            logger.error(f"Error clearing tokens: {e}")
 
     async def disconnect(self):
         """Disconnect from WebSocket and close database connection."""
@@ -198,25 +211,10 @@ class PumpFunClient:
             # Store in active tokens cache
             self.active_tokens[token.mint] = token
 
-            # Create trade record
-            trade = Trade(
-                signature=data["signature"],
-                mint=data["mint"],
-                sol_amount=data["sol_amount"],
-                token_amount=data["token_amount"],
-                is_buy=data["is_buy"],
-                user=data["user"],
-                slot=data.get("slot", 0),
-                tx_index=data.get("tx_index", 0),
-                timestamp=datetime.fromtimestamp(data.get("timestamp", 0)),
-                virtual_sol_reserves=data["virtual_sol_reserves"],
-                virtual_token_reserves=data["virtual_token_reserves"]
-            )
-            await trade.insert()
-
+            # Log trade activity without storing
             logger.debug(
-                f"Trade processed: {'BUY' if trade.is_buy else 'SELL'} "
-                f"{token.symbol} by {trade.user[:8]}..."
+                f"Trade processed: {'BUY' if data.get('is_buy') else 'SELL'} "
+                f"{token.symbol} by {data.get('user', '')[:8]}..."
             )
 
         except Exception as e:

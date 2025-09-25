@@ -140,6 +140,37 @@ class LiveKitClient:
             logger.error(f"Failed to generate token: {e}")
             return ""
 
+    async def validate_stream_active(self, token_mint: str) -> bool:
+        """
+        Validate if a stream is actually active by checking LiveKit room status.
+
+        Args:
+            token_mint: Token mint address
+
+        Returns:
+            bool: True if stream is active with participants, False otherwise
+        """
+        try:
+            # First get livestream info from Pump.fun
+            livestream_info = await self.get_livestream_info(token_mint)
+
+            if not livestream_info:
+                logger.warning(f"No livestream info found for {token_mint}")
+                return False
+
+            # Check if stream has participants
+            num_participants = livestream_info.get('num_participants', 0)
+            is_live = livestream_info.get('is_live', False)
+
+            logger.info(f"Stream validation for {token_mint}: is_live={is_live}, participants={num_participants}")
+
+            # Stream is valid if it's marked as live AND has at least 1 participant (the streamer)
+            return is_live and num_participants > 0
+
+        except Exception as e:
+            logger.error(f"Error validating stream {token_mint}: {e}")
+            return False
+
     async def get_access_token_from_pump(self, mint_id: str) -> Optional[str]:
         """
         Get access token from Pump.fun's join endpoint.
@@ -210,26 +241,46 @@ class LiveKitClient:
 
         stream_id = str(livestream_info['id'])  # This is the actual stream ID
 
+        # IMPORTANT: Use the exact room_id format that Pump.fun expects
+        # This MUST match what's in the JWT token
+        room_id = f"{mint}:{stream_id}"
+
         # Get access token from Pump.fun's join endpoint
-        logger.info(f"Getting access token for {mint}...")
+        logger.info(f"Getting access token for {mint} with room_id: {room_id}")
         access_token = await self.get_access_token_from_pump(mint)
 
         if not access_token:
             logger.error(f"Failed to get access token for {mint}")
             return None
 
-        logger.info(f"Successfully got access token for {mint}")
+        # Decode token to verify room_id matches
+        try:
+            import jwt
+            decoded = jwt.decode(access_token, options={"verify_signature": False})
+            token_room = decoded.get('video', {}).get('room', '')
+            logger.info(f"✅ Token validation - Token room: {token_room}, Expected room: {room_id}")
+
+            if token_room != room_id:
+                logger.error(f"❌ CRITICAL: Room mismatch! Token has: {token_room}, We expect: {room_id}")
+                # The token from Pump.fun has the correct room, use that
+                room_id = token_room
+                logger.info(f"Using room from token: {room_id}")
+        except Exception as e:
+            logger.error(f"Failed to decode token for verification: {e}")
+
+        logger.info(f"Successfully got access token for {mint}, final room: {room_id}")
 
         stream_info = {
             "mint": mint,
             "name": token_data.get("name", "Unknown"),
             "symbol": token_data.get("symbol", ""),
             "livekit_url": self.LIVEKIT_URL,
-            "room_id": f"{mint}:{stream_id}",
+            "room_id": room_id,  # Use the verified room_id
             "access_token": access_token,
-            "thumbnail": token_data.get("image_uri", ""),
+            "thumbnail": token_data.get("image_uri", "") or token_data.get("thumbnail", ""),
             "is_live": True,
-            "viewer_count": livestream_info.get("numParticipants", 0)
+            "viewer_count": livestream_info.get("numParticipants", 0),
+            "stream_id": stream_id  # Keep stream_id for reference
         }
 
         return stream_info

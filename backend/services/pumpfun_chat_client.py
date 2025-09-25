@@ -9,10 +9,11 @@ import asyncio
 import json
 import logging
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import websocket
 import threading
 from queue import Queue
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +282,59 @@ class PumpFunChatClient:
             bool: True if message was sent successfully
         """
         return await asyncio.get_event_loop().run_in_executor(None, self.send_message, message)
+
+
+    @staticmethod
+    async def fetch_active_livestreams() -> List[Dict[str, Any]]:
+        """
+        Fetch currently active livestreams from Pump.fun API.
+
+        Returns:
+            List[Dict[str, Any]]: List of tokens with active livestreams
+        """
+        try:
+            url = "https://frontend-api-v3.pump.fun/livestreams"
+
+            headers = {
+                'accept': 'application/json',
+                'origin': 'https://pump.fun',
+                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        # Filter for streams with participants
+                        active_streams = []
+                        for stream in data:
+                            # Stream is active if it has participants and is marked as live
+                            if stream.get('num_participants', 0) > 0 and stream.get('is_live', False):
+                                active_streams.append(stream)
+
+                        logger.info(f"Found {len(active_streams)} active livestreams with participants")
+                        return active_streams
+                    else:
+                        logger.warning(f"Failed to fetch livestreams: {response.status}")
+                        return []
+
+        except Exception as e:
+            logger.error(f"Error fetching active livestreams: {e}")
+            return []
+
+    @staticmethod
+    async def get_token_stream_url(mint: str) -> str:
+        """
+        Generate stream URL for a token.
+
+        Args:
+            mint: Token mint address
+
+        Returns:
+            str: Stream URL
+        """
+        return f"https://pump.fun/coin/{mint}"
 
 
 # Example usage

@@ -8,9 +8,13 @@ getting random pairs, and retrieving stream metadata.
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
+import asyncio
+import logging
 
 from services.stream_manager_v2 import StreamManager
 from services.livekit_client import LiveKitClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -131,13 +135,22 @@ async def get_random_stream_pair(
         HTTPException: If insufficient streams available or pairing fails
     """
     try:
-        # Get random pair
-        pair = stream_manager.get_random_pair()
+        # Try to get a valid random pair with retry logic
+        max_attempts = 3
+        pair = None
+
+        for attempt in range(max_attempts):
+            pair = stream_manager.get_random_pair()
+            if pair:
+                logger.info(f"Got valid stream pair on attempt {attempt + 1}")
+                break
+            logger.warning(f"Attempt {attempt + 1} failed to get valid pair, retrying...")
+            await asyncio.sleep(0.5)  # Brief delay between attempts
 
         if not pair:
             raise HTTPException(
                 status_code=503,
-                detail="Insufficient live streams available. Please try again later."
+                detail="Insufficient live streams available or streams have duplicate rooms. Please try again later."
             )
 
         stream_1, stream_2 = pair
@@ -294,8 +307,25 @@ async def get_stream_access_token(mint_id: str) -> Dict[str, Any]:
     try:
         livekit_client = LiveKitClient()
 
-        # Get access token from Pump.fun
-        access_token = await livekit_client.get_access_token_from_pump(mint_id)
+        # First validate if stream is actually active
+        is_valid = await livekit_client.validate_stream_active(mint_id)
+        if not is_valid:
+            logger.warning(f"Stream {mint_id} is not active or has no participants")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Stream {mint_id} is not currently active. Please try again later."
+            )
+
+        # Get access token from Pump.fun with retry
+        max_attempts = 2
+        access_token = None
+
+        for attempt in range(max_attempts):
+            access_token = await livekit_client.get_access_token_from_pump(mint_id)
+            if access_token:
+                break
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(0.5)  # Brief delay before retry
 
         if not access_token:
             raise HTTPException(
@@ -303,20 +333,28 @@ async def get_stream_access_token(mint_id: str) -> Dict[str, Any]:
                 detail=f"Could not get access token for stream {mint_id}. Stream may not be live."
             )
 
-        # Parse the token to get room ID
-        # The room ID is usually in format "livestream:{mint_id}:{number}"
-        room_id = f"livestream:{mint_id}"
+        # Decode token to extract actual room ID
+        try:
+            import jwt
+            decoded = jwt.decode(access_token, options={"verify_signature": False})
+            room_id = decoded.get('video', {}).get('room', f"livestream:{mint_id}")
+            logger.info(f"Extracted room ID from token: {room_id}")
+        except Exception as e:
+            logger.error(f"Failed to decode token: {e}")
+            room_id = f"livestream:{mint_id}"
 
         return {
             "success": True,
             "access_token": access_token,
             "room_id": room_id,
-            "mint_id": mint_id
+            "mint_id": mint_id,
+            "is_active": True
         }
 
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to get access token for {mint_id}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get access token: {str(e)}"

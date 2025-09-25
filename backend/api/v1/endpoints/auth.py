@@ -4,13 +4,17 @@ Authentication Endpoints
 API endpoints for wallet-based user authentication.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 import logging
 import secrets
 import time
+import os
+import aiofiles
+from pathlib import Path
+import hashlib
 
 from services.wallet_auth_service import WalletAuthService
 from models.user import User
@@ -250,6 +254,55 @@ async def disconnect_wallet(
     }
 
 
+@router.put("/wallet/profile")
+async def update_wallet_profile(
+    profile_data: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Update current user's profile.
+
+    Args:
+        profile_data (Dict[str, Any]): Profile data to update
+        current_user (Dict[str, Any]): Current authenticated user
+
+    Returns:
+        Dict[str, Any]: Updated user profile
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        # Get user from database
+        user = await User.find_one(User.wallet_address == current_user["wallet_address"])
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Update allowed fields
+        if "username" in profile_data:
+            user.username = profile_data["username"]
+            user.display_name = profile_data["username"]
+        if "bio" in profile_data:
+            user.bio = profile_data["bio"]
+        if "profile_image" in profile_data:
+            user.profile_image = profile_data["profile_image"]
+
+        # Save updates
+        user.updated_at = datetime.now(timezone.utc)
+        await user.save()
+
+        return {
+            "success": True,
+            "message": "Profile updated successfully",
+            "user": user.to_public_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
+
+
 @router.get("/wallet/validate")
 async def validate_wallet_token(
     current_user: Dict[str, Any] = Depends(get_current_user)
@@ -273,6 +326,75 @@ async def validate_wallet_token(
         "username": current_user["username"],
         "expires_at": current_user.get("exp")
     }
+
+
+@router.post("/wallet/upload-avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Upload user avatar image.
+
+    Args:
+        file (UploadFile): Image file to upload
+        current_user (Dict[str, Any]): Current authenticated user
+
+    Returns:
+        Dict[str, Any]: Upload result with image URL
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.")
+
+    # Validate file size (max 5MB)
+    max_size = 5 * 1024 * 1024  # 5MB
+    contents = await file.read()
+    if len(contents) > max_size:
+        raise HTTPException(status_code=400, detail="File size too large. Maximum size is 5MB.")
+
+    try:
+        # Create uploads directory if it doesn't exist
+        upload_dir = Path("uploads/avatars")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate unique filename
+        file_extension = file.filename.split(".")[-1] if file.filename else "jpg"
+        file_hash = hashlib.md5(contents).hexdigest()
+        filename = f"{current_user['wallet_address'][:10]}_{file_hash[:8]}.{file_extension}"
+        file_path = upload_dir / filename
+
+        # Save file
+        async with aiofiles.open(file_path, "wb") as f:
+            await f.write(contents)
+
+        # Generate public URL (adjust based on your static file serving setup)
+        # This assumes you're serving static files from /static/avatars
+        image_url = f"/static/avatars/{filename}"
+
+        # Update user profile with new image URL
+        user = await User.find_one(User.wallet_address == current_user["wallet_address"])
+        if user:
+            user.profile_image = image_url
+            user.updated_at = datetime.now(timezone.utc)
+            await user.save()
+
+            return {
+                "success": True,
+                "message": "Avatar uploaded successfully",
+                "image_url": image_url,
+                "user": user.to_public_dict()
+            }
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+
+    except Exception as e:
+        logger.error(f"Failed to upload avatar: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload avatar: {str(e)}")
 
 
 @router.get("/nonce")

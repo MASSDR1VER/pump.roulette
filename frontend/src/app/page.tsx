@@ -45,7 +45,7 @@ import {
 
 export default function PumpRoulettePage() {
   const { streamPair, loading, error, fetchNewPair } = useStreamPair()
-  const { user, connectWallet, logout, isConnecting, error: authError, isWalletConnected } = useAuth()
+  const { user, connectWallet, logout, updateProfile, isConnecting, error: authError, isWalletConnected } = useAuth()
   useAudioSubscription()
   const { toast } = useToast()
   const router = useRouter()
@@ -100,6 +100,8 @@ export default function PumpRoulettePage() {
     bio: '',
     profile_image: ''
   })
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -193,6 +195,13 @@ export default function PumpRoulettePage() {
 
       setFetchingTokens(true)
       try {
+        console.log('🔑 Fetching access tokens for streams:', {
+          stream1: currentStreamPair.stream_1.token_name,
+          stream1_mint: currentStreamPair.stream_1.token_address,
+          stream2: currentStreamPair.stream_2.token_name,
+          stream2_mint: currentStreamPair.stream_2.token_address
+        })
+
         // Fetch tokens for both streams in parallel
         const [token1Response, token2Response] = await Promise.all([
           fetch(`${config.api.baseUrl}/api/v1/streams/access-token/${currentStreamPair.stream_1.token_address}`),
@@ -202,14 +211,36 @@ export default function PumpRoulettePage() {
         const token1Data = token1Response.ok ? await token1Response.json() : null
         const token2Data = token2Response.ok ? await token2Response.json() : null
 
+        // Validate that tokens are for the correct streams
+        if (token1Data?.mint_id !== currentStreamPair.stream_1.token_address) {
+          console.error('❌ Token mismatch for stream 1:', {
+            expected: currentStreamPair.stream_1.token_address,
+            received: token1Data?.mint_id
+          })
+        }
+        if (token2Data?.mint_id !== currentStreamPair.stream_2.token_address) {
+          console.error('❌ Token mismatch for stream 2:', {
+            expected: currentStreamPair.stream_2.token_address,
+            received: token2Data?.mint_id
+          })
+        }
+
         setStreamTokens({
           stream1: token1Data?.access_token,
           stream2: token2Data?.access_token
         })
 
-        console.log('Access tokens fetched:', {
-          stream1: !!token1Data?.access_token,
-          stream2: !!token2Data?.access_token
+        console.log('✅ Access tokens fetched:', {
+          stream1: {
+            has_token: !!token1Data?.access_token,
+            room_id: token1Data?.room_id,
+            mint_id: token1Data?.mint_id
+          },
+          stream2: {
+            has_token: !!token2Data?.access_token,
+            room_id: token2Data?.room_id,
+            mint_id: token2Data?.mint_id
+          }
         })
       } catch (error) {
         console.error('Failed to fetch access tokens:', error)
@@ -426,6 +457,87 @@ export default function PumpRoulettePage() {
   const handleConnectWallet = () => {
     // Just try to connect wallet directly, no modal
     connectWallet()
+  }
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+    if (!allowedTypes.includes(file.type)) {
+      toast({
+        title: "Invalid file type",
+        description: "Please upload a JPEG, PNG, GIF, or WebP image",
+        variant: "destructive"
+      })
+      return
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: "File too large",
+        description: "Please upload an image smaller than 5MB",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setUploadingImage(true)
+
+    try {
+      const token = localStorage.getItem('auth_token')
+      if (!token) {
+        throw new Error('Not authenticated')
+      }
+
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch(`${config.api.baseUrl}/api/v1/auth/wallet/upload-avatar`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to upload image')
+      }
+
+      const data = await response.json()
+
+      if (data.success && data.image_url) {
+        // Update local state
+        setEditedProfile(prev => ({ ...prev, profile_image: `${config.api.baseUrl}${data.image_url}` }))
+
+        // Update user in auth context if available
+        if (data.user) {
+          // This would need to be implemented in useAuth hook
+          // For now, just show success
+        }
+
+        toast({
+          title: "Image uploaded",
+          description: "Your profile image has been updated"
+        })
+      }
+    } catch (error) {
+      console.error('Image upload error:', error)
+      toast({
+        title: "Upload failed",
+        description: error instanceof Error ? error.message : "Failed to upload image",
+        variant: "destructive"
+      })
+    } finally {
+      setUploadingImage(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
   }
 
   const handleProfileClick = (e: React.MouseEvent) => {
@@ -690,6 +802,16 @@ export default function PumpRoulettePage() {
   }
 
   const handleNextPair = async () => {
+    // Prevent multiple clicks while loading
+    if (loading) {
+      console.log('Already fetching new pair, skipping...')
+      return
+    }
+
+    // Clear all stream-related state immediately
+    setStreamTokens({ stream1: undefined, stream2: undefined })
+    setFetchingTokens(false)
+
     // Clear audio state when switching pairs
     setHasActiveAudio(false)
     setAudioRoomToken(null)
@@ -697,10 +819,15 @@ export default function PumpRoulettePage() {
     setViewerAudioEnabled(false)
     setAudioParticipants([])
 
-    await fetchNewPair()
+    console.log('🔄 Cleared all stream state, fetching new pair...')
 
-    // After fetching new pair, store it in the backend for the room
-    // This will be done when WebSocket connects with stream data
+    // Fetch new pair
+    const success = await fetchNewPair()
+
+    // If failed, ensure loading state is cleared
+    if (!success) {
+      console.log('Failed to fetch new pair')
+    }
   }
 
   const sendMessage = () => {
@@ -758,6 +885,7 @@ export default function PumpRoulettePage() {
       id: msg.user_id,
       username: msg.username,
       profile_image: msg.profile_image,
+      bio: msg.bio,
       wallet_address: msg.user_id
     })
     setShowUserProfile(true)
@@ -1590,9 +1718,26 @@ export default function PumpRoulettePage() {
                     className="w-24 h-24 rounded-full border-2 border-[#7DE2A1]"
                   />
                   {isEditingProfile && (
-                    <button className="absolute bottom-0 right-0 bg-[#7DE2A1] text-black rounded-full p-1.5 hover:bg-[#6dd291] transition-colors">
-                      <Camera className="h-4 w-4" />
-                    </button>
+                    <>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+                        onChange={handleImageUpload}
+                        className="hidden"
+                      />
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploadingImage}
+                        className="absolute bottom-0 right-0 bg-[#7DE2A1] text-black rounded-full p-1.5 hover:bg-[#6dd291] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {uploadingImage ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Camera className="h-4 w-4" />
+                        )}
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -1661,13 +1806,25 @@ export default function PumpRoulettePage() {
               {isEditingProfile && (
                 <div className="flex gap-3 pt-4">
                   <button
-                    onClick={() => {
-                      // TODO: Save profile changes to backend
-                      toast({
-                        title: "Profile updated",
-                        description: "Your changes have been saved"
-                      })
-                      setIsEditingProfile(false)
+                    onClick={async () => {
+                      try {
+                        await updateProfile({
+                          username: editedProfile.username,
+                          bio: editedProfile.bio,
+                          profile_image: editedProfile.profile_image
+                        })
+                        toast({
+                          title: "Profile updated",
+                          description: "Your changes have been saved"
+                        })
+                        setIsEditingProfile(false)
+                      } catch (error) {
+                        toast({
+                          title: "Error",
+                          description: "Failed to update profile",
+                          variant: "destructive"
+                        })
+                      }
                     }}
                     className="flex-1 py-2 px-4 bg-[#7DE2A1] text-black rounded-lg font-medium hover:bg-[#6dd291] transition-colors"
                   >

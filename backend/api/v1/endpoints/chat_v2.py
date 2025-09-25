@@ -237,6 +237,7 @@ async def websocket_endpoint(
     user_id = params.get('user_id', [None])[0]
     username = params.get('username', [None])[0]
     profile_image = params.get('profile_image', [None])[0]
+    bio = params.get('bio', [None])[0]
     stream_1 = params.get('stream_1', [None])[0]
     stream_2 = params.get('stream_2', [None])[0]
 
@@ -292,7 +293,8 @@ async def websocket_endpoint(
                 username=username,
                 room_id=room_id,
                 stream_pair=stream_pair,
-                profile_image=profile_image
+                profile_image=profile_image,
+                bio=bio
             )
             logger.info(f"Successfully connected to WebSocket manager")
         except Exception as conn_err:

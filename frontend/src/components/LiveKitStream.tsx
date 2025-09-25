@@ -66,15 +66,63 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
   const [showControls, setShowControls] = useState(false) // Hidden by default, show on hover
   const [isConnecting, setIsConnecting] = useState(false)
   const [currentToken, setCurrentToken] = useState<string | null>(null)
+  const connectionAttemptRef = useRef<boolean>(false)
+  const roomRef = useRef<Room | null>(null)
+  const streamKeyRef = useRef<string>('')
+  const previousTokenAddress = useRef<string | undefined>(undefined)
+  const isMountedRef = useRef<boolean>(false)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    // Use the access token from stream data if available
+    // Track mount status
+    isMountedRef.current = true
+
+    // Abort any previous connection attempts
+    if (abortControllerRef.current) {
+      console.log(`[${streamId}] Aborting previous connection attempt`)
+      abortControllerRef.current.abort()
+    }
+
+    // Create new abort controller for this connection attempt
+    abortControllerRef.current = new AbortController()
+
+    // Log when stream changes
+    if (stream?.token_address) {
+      console.log(`[${streamId}] Stream changed to ${stream.token_address}`)
+      // Store previous token address for cleanup
+      previousTokenAddress.current = stream.token_address
+    }
+
+    // Create a unique key for this stream instance
+    const streamKey = `${stream?.token_address}-${streamId}-${Date.now()}`
+    streamKeyRef.current = streamKey
+
     const connectWithToken = async () => {
-      // Prevent multiple simultaneous connections
-      if (isConnecting || room?.state === 'connected') {
-        console.log('Already connecting or connected, skipping...')
+      // Check if component is still mounted
+      if (!isMountedRef.current) {
+        console.log(`[${streamId}] Component unmounted, aborting connection`)
         return
       }
+
+      // Check if this is still the current stream
+      if (streamKeyRef.current !== streamKey) {
+        console.log(`[${streamId}] Stream changed, aborting connection attempt`)
+        return
+      }
+
+      // Prevent multiple simultaneous connections
+      if (connectionAttemptRef.current) {
+        console.log(`[${streamId}] Connection attempt already in progress, skipping...`)
+        return
+      }
+
+      // Check if already connected to the correct room
+      if (roomRef.current?.state === 'connected' && currentToken === stream.access_token) {
+        console.log(`[${streamId}] Already connected to room with same token, skipping...`)
+        return
+      }
+
+      connectionAttemptRef.current = true
 
       try {
         setIsConnecting(true)
@@ -83,13 +131,13 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
 
         let token = stream.access_token
 
-        // Check if stream already has an access token
-        if (token) {
-          console.log('Using access token from stream data')
-        } else {
-          // Try to fetch a new token
-          console.log('Fetching new access token for:', stream.token_address)
-          const response = await fetch(`${API_BASE_URL}/streams/access-token/${stream.token_address}`)
+        // Always fetch fresh token for each stream
+        // to ensure we get the correct room for this specific stream
+        if (!token) {
+          console.log(`[${streamId}] Fetching new access token for:`, stream.token_address)
+          const response = await fetch(`${API_BASE_URL}/streams/access-token/${stream.token_address}`, {
+            signal: abortControllerRef.current?.signal
+          })
 
           if (!response.ok) {
             if (response.status === 404) {
@@ -105,43 +153,104 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
           }
 
           token = data.access_token
+          console.log(`[${streamId}] Got fresh token for ${stream.token_address}`)
         }
 
-        // Only connect if token has changed or we don't have a room
-        if (token && (token !== currentToken || !room)) {
+        // Check again if this is still the current stream before connecting
+        if (streamKeyRef.current !== streamKey) {
+          console.log(`[${streamId}] Stream changed during token fetch, aborting`)
+          return
+        }
+
+        // Only connect if token is different or no room exists
+        if (token && (token !== currentToken || !roomRef.current)) {
           setCurrentToken(token)
-          await connectToRoom(token)
+          await connectToRoom(token, streamKey)
         }
 
-      } catch (error) {
-        console.error('Failed to connect to stream:', error)
+      } catch (error: any) {
+        // Ignore abort errors
+        if (error?.name === 'AbortError') {
+          console.log(`[${streamId}] Connection aborted`)
+          return
+        }
+        console.error(`[${streamId}] Failed to connect to stream:`, error)
         setError(error instanceof Error ? error.message : 'Unable to connect to stream')
         setIsLoading(false)
       } finally {
-        setIsConnecting(false)
+        if (isMountedRef.current) {
+          setIsConnecting(false)
+          connectionAttemptRef.current = false
+        }
       }
     }
 
-    // Connect if we have stream data and not already connected
-    if (stream?.token_address && !room) {
-      connectWithToken()
-    } else if (!stream?.token_address) {
+    // Connect if we have stream data
+    if (stream?.token_address) {
+      // Small delay to prevent double connection in StrictMode
+      const connectTimer = setTimeout(() => {
+        if (isMountedRef.current) {
+          connectWithToken()
+        }
+      }, 100)
+
+      return () => {
+        clearTimeout(connectTimer)
+      }
+    } else {
       setError('Stream information missing')
       setIsLoading(false)
     }
 
     return () => {
-      // Only disconnect if component is unmounting
-      if (room) {
+      // Mark as unmounted
+      isMountedRef.current = false
+
+      // Abort any pending fetch requests
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+
+      // Cleanup when stream changes or component unmounts
+      console.log(`[${streamId}] Cleanup for stream key: ${streamKey}`)
+      if (streamKeyRef.current === streamKey && roomRef.current) {
         disconnect()
       }
     }
-  }, [stream?.token_address, stream?.access_token]) // Only re-run when these specific values change
+  }, [stream?.token_address, streamId]) // Only re-run when stream changes
 
-  const connectToRoom = async (token: string) => {
+  const connectToRoom = async (token: string, expectedStreamKey: string) => {
+    // Double check we're not already connecting
+    if (roomRef.current?.state === 'connecting') {
+      console.log(`[${streamId}] Already connecting to room, aborting duplicate attempt`)
+      return
+    }
+
     try {
       setIsLoading(true)
       setError(null)
+
+      // Disconnect existing room if any
+      if (roomRef.current && roomRef.current.state !== 'disconnected') {
+        console.log(`[${streamId}] Disconnecting existing room (state: ${roomRef.current.state})`)
+        try {
+          await roomRef.current.disconnect()
+        } catch (e) {
+          console.warn(`[${streamId}] Error disconnecting existing room:`, e)
+        }
+        roomRef.current = null
+        setRoom(null)
+      }
+
+      // Check if stream key is still valid before continuing
+      if (streamKeyRef.current !== expectedStreamKey || !isMountedRef.current) {
+        console.log(`[${streamId}] Stream changed or unmounted, aborting room connection`)
+        return
+      }
+
+      // Create room with unique identifier to prevent conflicts
+      const roomInstanceId = `${streamId}-${Date.now()}`
+      console.log(`[${streamId}] Creating new room instance: ${roomInstanceId}`)
 
       const newRoom = new Room({
         adaptiveStream: true,
@@ -151,10 +260,20 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
         },
       })
 
+      // Store room reference immediately to prevent duplicate creation
+      roomRef.current = newRoom
+      setRoom(newRoom)
+
       newRoom.on(RoomEvent.Connected, () => {
-        console.log('Connected to LiveKit room for stream:', streamId)
-        console.log('Room participants:', newRoom.participants ? newRoom.participants.size : 0)
-        console.log('Room state:', newRoom.state)
+        // Final check if this is still the expected stream
+        if (streamKeyRef.current !== expectedStreamKey) {
+          console.log(`[${streamId}] Stream changed after connection, disconnecting`)
+          newRoom.disconnect()
+          return
+        }
+        console.log(`[${streamId}] ✅ Connected to LiveKit room`)
+        console.log(`[${streamId}] Room participants:`, newRoom.participants ? newRoom.participants.size : 0)
+        console.log(`[${streamId}] Room state:`, newRoom.state)
       })
 
       newRoom.on(RoomEvent.ParticipantConnected, (participant) => {
@@ -166,9 +285,15 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
       })
 
       newRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        // Check if this is still the expected stream
+        if (streamKeyRef.current !== expectedStreamKey) {
+          console.log(`[${streamId}] Stream changed, ignoring track`)
+          return
+        }
+
         if (track instanceof RemoteTrack) {
           if (track.kind === Track.Kind.Video) {
-            console.log('Video track received for stream:', streamId)
+            console.log(`[${streamId}] Video track received from participant:`, participant.identity)
             setVideoTracks(prev => [...prev, track])
 
             if (videoContainerRef.current) {
@@ -182,18 +307,21 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
               element.style.width = '100%'
               element.style.height = '100%'
               element.style.objectFit = 'cover'
+              element.setAttribute('data-stream-key', expectedStreamKey)
               videoContainerRef.current.appendChild(element)
 
-              console.log('Video element attached to DOM for stream:', streamId)
+              console.log(`[${streamId}] Video element attached to DOM`)
               setIsLoading(false)
             }
           } else if (track.kind === Track.Kind.Audio) {
+            console.log(`[${streamId}] Audio track received from participant:`, participant.identity)
             setAudioTracks(prev => [...prev, track])
 
             const element = track.attach() as HTMLAudioElement
             element.style.display = 'none'
             element.setAttribute('data-livekit', 'true')
             element.setAttribute('data-stream', streamId)
+            element.setAttribute('data-stream-key', expectedStreamKey)
             element.muted = muted
             document.body.appendChild(element)
           }
@@ -212,6 +340,12 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
         }
       })
 
+      // Final check before connecting
+      if (streamKeyRef.current !== expectedStreamKey) {
+        console.log(`[${streamId}] Stream changed before connect, aborting`)
+        return
+      }
+
       await newRoom.connect(
         'wss://pump-prod-tg2x8veh.livekit.cloud',
         token,
@@ -220,41 +354,67 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
         }
       )
 
-      setRoom(newRoom)
+      // Store room only if stream is still current
+      if (streamKeyRef.current === expectedStreamKey) {
+        setRoom(newRoom)
+        console.log(`[${streamId}] Successfully connected and stored room`)
+      } else {
+        console.log(`[${streamId}] Stream changed after connect, disconnecting`)
+        await newRoom.disconnect()
+      }
 
     } catch (err: any) {
-      console.error('Failed to connect to room:', err)
+      console.error(`[${streamId}] Failed to connect to room:`, err)
       setError(err.message || 'Failed to connect to stream')
       setIsLoading(false)
+
+      // Clear connection attempt flag on error
+      connectionAttemptRef.current = false
     }
   }
 
   const disconnect = () => {
-    const allTracks = audioTracks.concat(videoTracks)
+    console.log(`[${streamId}] Disconnecting stream`)
+
+    // Stop and detach all tracks
+    const allTracks = [...audioTracks, ...videoTracks]
     allTracks.forEach(track => {
       try {
         track.stop()
         track.detach()
       } catch (e) {
-        console.error('Error stopping track:', e)
+        console.error(`[${streamId}] Error stopping track:`, e)
       }
     })
 
     setAudioTracks([])
     setVideoTracks([])
 
-    if (room) {
-      room.disconnect()
-      room.removeAllListeners()
+    // Disconnect room
+    if (roomRef.current) {
+      try {
+        roomRef.current.disconnect()
+        roomRef.current.removeAllListeners()
+      } catch (e) {
+        console.error(`[${streamId}] Error disconnecting room:`, e)
+      }
+      roomRef.current = null
       setRoom(null)
     }
 
+    // Clear video container
     if (videoContainerRef.current) {
       videoContainerRef.current.innerHTML = ''
     }
 
-    const audioElements = document.querySelectorAll('audio[data-livekit]')
+    // Remove audio elements for this stream
+    const audioElements = document.querySelectorAll(`audio[data-stream="${streamId}"]`)
     audioElements.forEach(el => el.remove())
+
+    // Clear current token to force refresh on next connect
+    setCurrentToken(null)
+    connectionAttemptRef.current = false
+    setIsConnecting(false)
   }
 
   useEffect(() => {
@@ -365,7 +525,11 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
             <p className="text-red-400 mb-4">{error}</p>
             <button
               onClick={async () => {
-                // Retry by fetching a new token
+                // Clear state and retry
+                setCurrentToken(null)
+                connectionAttemptRef.current = false
+                streamKeyRef.current = ''
+
                 try {
                   setIsLoading(true)
                   setError(null)
@@ -379,12 +543,15 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
                   const data = await response.json()
 
                   if (data.access_token) {
-                    await connectToRoom(data.access_token)
+                    const streamKey = `${stream.token_address}-${streamId}-${Date.now()}`
+                    streamKeyRef.current = streamKey
+                    setCurrentToken(data.access_token)
+                    await connectToRoom(data.access_token, streamKey)
                   } else {
                     throw new Error('No access token available')
                   }
                 } catch (err) {
-                  console.error('Retry failed:', err)
+                  console.error(`[${streamId}] Retry failed:`, err)
                   setError('Unable to connect to stream')
                   setIsLoading(false)
                 }

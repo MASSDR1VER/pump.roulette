@@ -8,6 +8,7 @@ and manages the WebSocket connections for real-time chat functionality.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import uvicorn
 import asyncio
@@ -15,6 +16,7 @@ import logging
 from typing import AsyncGenerator
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
+from pathlib import Path
 
 from config.settings import settings
 from api.v1.router import api_router
@@ -65,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     # Start cleanup task
     async def cleanup_task():
-        """Periodic cleanup task to remove old tokens and mark inactive streams."""
+        """Periodic cleanup task to mark inactive streams."""
         while True:
             try:
                 await asyncio.sleep(300)  # Wait 5 minutes
@@ -75,13 +77,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
                 if inactive_count > 0:
                     logger.info(f"Marked {inactive_count} streams as inactive")
 
-                # Cleanup old tokens (older than 24 hours)
-                deleted_count = await app.state.stream_manager.pump_client.cleanup_old_tokens(hours=24)
-                if deleted_count > 0:
-                    logger.info(f"Deleted {deleted_count} old tokens")
+                # Note: We don't cleanup tokens anymore since they're cleared on startup
 
             except Exception as e:
                 logger.error(f"Error in cleanup task: {e}")
+                # Continue running even if error occurs
+                await asyncio.sleep(60)  # Wait 1 minute before retrying
 
     app.state.cleanup_task = asyncio.create_task(cleanup_task())
     logger.info("Started periodic cleanup task")
@@ -120,6 +121,13 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
+
+# Create uploads directory if it doesn't exist
+upload_dir = Path("uploads/avatars")
+upload_dir.mkdir(parents=True, exist_ok=True)
+
+# Mount static files for serving uploaded images
+app.mount("/static/avatars", StaticFiles(directory="uploads/avatars"), name="avatars")
 
 
 @app.get("/")
