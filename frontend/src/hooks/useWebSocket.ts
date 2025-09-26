@@ -287,6 +287,9 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     setIsConnected(false)
     setMessages([])
     setUserCount(0)
+    setAudioSummon(null)
+    setAudioJoinRequest(null)
+    setStreamerReady(null)
   }, [socket])
 
   const sendMessage = useCallback((content: string, replyTo?: string) => {
@@ -351,10 +354,13 @@ export function useWebSocket(roomId: string, streamPair?: any) {
       prevUserRef.current = currentUserId
       prevRoomRef.current = roomId
 
-      // Clear messages when changing rooms
+      // Clear messages and notification states when changing rooms
       if (roomChanged) {
         setMessages([])
         setUserCount(0)
+        setAudioSummon(null)
+        setAudioJoinRequest(null)
+        setStreamerReady(null)
       }
 
       // Disconnect existing socket if any
@@ -400,6 +406,40 @@ export function useWebSocket(roomId: string, streamPair?: any) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, user?.wallet_address, isWalletConnected])
 
+  // Listen for auth refresh connection events
+  useEffect(() => {
+    const handleAuthRefresh = (event: CustomEvent) => {
+      console.log('Auth refresh connection event received:', event.detail)
+
+      if (!roomId || roomId === 'default') {
+        return
+      }
+
+      // Force reconnection by disconnecting and reconnecting
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        console.log('Disconnecting current WebSocket for auth refresh')
+        socket.close(1000, 'Auth refresh')
+        setSocket(null)
+        setIsConnected(false)
+      }
+
+      // Reconnect after a small delay
+      setTimeout(() => {
+        if (!isConnecting.current) {
+          console.log('Reconnecting WebSocket after auth refresh')
+          connect()
+        }
+      }, 200)
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('auth:refresh-connection', handleAuthRefresh as EventListener)
+      return () => {
+        window.removeEventListener('auth:refresh-connection', handleAuthRefresh as EventListener)
+      }
+    }
+  }, [roomId, connect, socket])
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -420,6 +460,10 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     }
   }, [isConnected, ping])
 
+  const clearStreamerReady = useCallback(() => {
+    setStreamerReady(null)
+  }, [])
+
   return {
     socket,
     messages,
@@ -429,6 +473,7 @@ export function useWebSocket(roomId: string, streamPair?: any) {
     audioSummon,
     audioJoinRequest,
     streamerReady,
+    clearStreamerReady,
     sendMessage,
     connect,
     disconnect,

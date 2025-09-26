@@ -49,6 +49,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.6.0",
     "pump-chat-client": "^1.0.1",
-    "websocket": "^1.0.35"
+    "websocket": "^1.0.35",
+    "ws": "^8.18.3"
   }
 }

@@ -137,7 +137,8 @@ export default function PumpRoulettePage() {
     error: chatError,
     audioSummon,
     audioJoinRequest,
-    streamerReady
+    streamerReady,
+    clearStreamerReady
   } = useWebSocket(roomId, currentStreamPair)
 
   // Handle streamer ready notification
@@ -156,8 +157,13 @@ export default function PumpRoulettePage() {
         title: "Streamer joined!",
         description: `${streamerReady.streamer_joined} is ready to talk. Click "Listen to Conversation" to join.`,
       })
+
+      // Clear the notification after processing to prevent re-triggering
+      setTimeout(() => {
+        clearStreamerReady()
+      }, 100)
     }
-  }, [streamerReady, userRole, toast])
+  }, [streamerReady, userRole, toast, clearStreamerReady])
 
   // Handle audio join request (for streamers)
   useEffect(() => {
@@ -202,10 +208,35 @@ export default function PumpRoulettePage() {
           stream2_mint: currentStreamPair.stream_2.token_address
         })
 
-        // Fetch tokens for both streams in parallel
+        // Generate unique user ID for each viewer
+        const getUserId = () => {
+          // Try to get wallet address from localStorage (if user is authenticated)
+          const authToken = localStorage.getItem('auth_token')
+          if (authToken) {
+            try {
+              // Decode the JWT to get wallet address
+              const payload = JSON.parse(atob(authToken.split('.')[1]))
+              return payload.wallet_address || payload.sub
+            } catch (e) {
+              // If can't decode, fall back to generating unique session ID
+            }
+          }
+
+          // For guests, generate or get existing session ID
+          let sessionId = localStorage.getItem('viewer_session_id')
+          if (!sessionId) {
+            sessionId = `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+            localStorage.setItem('viewer_session_id', sessionId)
+          }
+          return sessionId
+        }
+
+        const userId = getUserId()
+
+        // Fetch tokens for both streams in parallel with user ID
         const [token1Response, token2Response] = await Promise.all([
-          fetch(`${config.api.baseUrl}/api/v1/streams/access-token/${currentStreamPair.stream_1.token_address}`),
-          fetch(`${config.api.baseUrl}/api/v1/streams/access-token/${currentStreamPair.stream_2.token_address}`)
+          fetch(`${config.api.baseUrl}/api/v1/streams/access-token/${currentStreamPair.stream_1.token_address}?user_id=${encodeURIComponent(userId)}`),
+          fetch(`${config.api.baseUrl}/api/v1/streams/access-token/${currentStreamPair.stream_2.token_address}?user_id=${encodeURIComponent(userId)}`)
         ])
 
         const token1Data = token1Response.ok ? await token1Response.json() : null
@@ -353,43 +384,57 @@ export default function PumpRoulettePage() {
   // Polling for audio room status
   useEffect(() => {
     if (!currentStreamPair?.room_id || audioEnabled || viewerAudioEnabled) {
+      console.log('🔄 Polling disabled:', { hasRoomId: !!currentStreamPair?.room_id, audioEnabled, viewerAudioEnabled })
       return
     }
 
+    console.log('🔄 Starting polling for audio room status')
+
     const checkForActiveAudio = async () => {
-      if (currentStreamPair?.room_id && !audioEnabled) {
-        console.log('🔄 Polling for audio room status...')
+      // Double check conditions before making API call
+      if (!currentStreamPair?.room_id || audioEnabled || viewerAudioEnabled) {
+        console.log('🔄 Skipping polling check due to state change')
+        return
+      }
 
-        try {
-          const response = await fetch(`${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`)
+      console.log('🔄 Polling for audio room status... (viewerAudioEnabled:', viewerAudioEnabled, ', audioEnabled:', audioEnabled, ')')
 
-          if (response.ok) {
-            const data = await response.json()
-            console.log('🎙️ Audio room status:', data)
+      try {
+        const response = await fetch(`${config.api.baseUrl}/api/v1/audio/stream/${currentStreamPair.room_id}`)
 
-            if (data.success && data.participants && data.participants.length > 0) {
-              console.log('✅ Active audio room detected with participants:', data.participants)
-              setHasActiveAudio(true)
-              setAudioParticipants(data.participants)
+        if (response.ok) {
+          const data = await response.json()
+          console.log('🎙️ Audio room status:', data)
 
-              // If we have a viewer token, store it for later use
-              if (data.viewer_token && !audioRoomToken) {
-                console.log('🎫 Storing viewer token for later use')
-                setAudioRoomToken(data.viewer_token)
-                setAudioRoomId(currentStreamPair.room_id)
-              }
-            } else {
-              console.log('⏳ No active participants yet')
+          if (data.success && data.participants && data.participants.length > 0) {
+            console.log('✅ Active audio room detected with participants:', data.participants)
+            setHasActiveAudio(true)
+            setAudioParticipants(data.participants)
+
+            // If we have a viewer token, store it for later use
+            if (data.viewer_token && !audioRoomToken) {
+              console.log('🎫 Storing viewer token for later use')
+              setAudioRoomToken(data.viewer_token)
+              setAudioRoomId(currentStreamPair.room_id)
+            }
+          } else {
+            // Only reset if we're still in polling mode (not if AudioRoom is active)
+            if (!viewerAudioEnabled && !audioEnabled) {
+              console.log('⏳ No active participants yet (resetting audioParticipants to [], viewerAudioEnabled:', viewerAudioEnabled, ')')
               setHasActiveAudio(false)
               setAudioParticipants([])
             }
-          } else {
-            console.log('❌ Audio room check failed:', response.status)
+          }
+        } else {
+          console.log('❌ Audio room check failed:', response.status)
+          if (!viewerAudioEnabled && !audioEnabled) {
             setHasActiveAudio(false)
             setAudioParticipants([])
           }
-        } catch (error) {
-          console.error('❌ Error checking audio room:', error)
+        }
+      } catch (error) {
+        console.error('❌ Error checking audio room:', error)
+        if (!viewerAudioEnabled && !audioEnabled) {
           setHasActiveAudio(false)
           setAudioParticipants([])
         }
@@ -400,12 +445,13 @@ export default function PumpRoulettePage() {
     checkForActiveAudio()
 
     // Set up polling interval
-    const intervalId = setInterval(() => {
-      checkForActiveAudio()
-    }, 10000) // Check every 10 seconds
+    const intervalId = setInterval(checkForActiveAudio, 10000) // Check every 10 seconds
 
-    return () => clearInterval(intervalId)
-  }, [currentStreamPair?.room_id, audioEnabled, viewerAudioEnabled])
+    return () => {
+      console.log('🔄 Clearing polling interval')
+      clearInterval(intervalId)
+    }
+  }, [currentStreamPair?.room_id]) // Remove audioEnabled and viewerAudioEnabled from deps to prevent restart
 
   // Handle auto-join for streamers when invited via URL
   useEffect(() => {
@@ -1000,13 +1046,13 @@ export default function PumpRoulettePage() {
 
   // Memoized LiveKitStream wrapper to prevent re-renders
   const LiveKitStreamMemoized = useMemo(() => {
-    return ({ stream, accessToken, streamId, muted, onMuteChange }: any) => {
+    return ({ stream, accessToken, streamId, muted, onMuteChange, isStreamer, micEnabled, onMicToggle, onLeaveStream }: any) => {
       const memoizedStream = useMemo(() => {
         if (!stream) return null
         console.log(`📦 [${streamId}] Creating memoized stream with thumbnail:`, stream.thumbnail_url)
         return {
           ...stream,
-          access_token: accessToken || stream.access_token
+          access_token: accessToken
         }
       }, [stream?.token_address, accessToken])
 
@@ -1018,6 +1064,10 @@ export default function PumpRoulettePage() {
           streamId={streamId}
           muted={muted}
           onMuteChange={onMuteChange}
+          isStreamer={isStreamer}
+          micEnabled={micEnabled}
+          onMicToggle={onMicToggle}
+          onLeaveStream={onLeaveStream}
         />
       )
     }
@@ -1036,6 +1086,13 @@ export default function PumpRoulettePage() {
               streamId="stream1"
               muted={streamMuted.stream1}
               onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream1: muted }))}
+              isStreamer={roleParam === 'streamer_a' && userRole === 'streamer' && audioEnabled}
+              micEnabled={micEnabled}
+              onMicToggle={() => setMicEnabled(!micEnabled)}
+              onLeaveStream={() => {
+                setAudioEnabled(false)
+                window.location.href = '/'
+              }}
             />
           ) : (
             <div className="w-full h-full bg-black relative overflow-hidden">
@@ -1088,6 +1145,7 @@ export default function PumpRoulettePage() {
               onMuteChange={(muted) => setMicEnabled(!muted)}
             />
           )}
+
         </div>
 
         {/* Stream 2 - Right side */}
@@ -1099,6 +1157,13 @@ export default function PumpRoulettePage() {
               streamId="stream2"
               muted={streamMuted.stream2}
               onMuteChange={(muted) => setStreamMuted(prev => ({ ...prev, stream2: muted }))}
+              isStreamer={roleParam === 'streamer_b' && userRole === 'streamer' && audioEnabled}
+              micEnabled={micEnabled}
+              onMicToggle={() => setMicEnabled(!micEnabled)}
+              onLeaveStream={() => {
+                setAudioEnabled(false)
+                window.location.href = '/'
+              }}
             />
           ) : (
             <div className="w-full h-full bg-black relative overflow-hidden">
@@ -1151,6 +1216,7 @@ export default function PumpRoulettePage() {
               onMuteChange={(muted) => setMicEnabled(!muted)}
             />
           )}
+
         </div>
       </div>
 
@@ -1177,16 +1243,6 @@ export default function PumpRoulettePage() {
           </div>
 
           <div className="flex items-center gap-2">
-            {customRoomId && (
-              <button
-                onClick={handleBackToRandomRoom}
-                className="h-8 px-3 bg-gray-600/50 hover:bg-gray-600/70 backdrop-blur text-white font-bold rounded-sm text-xs flex items-center gap-1.5 transition-all"
-              >
-                <Shuffle className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Random</span>
-              </button>
-            )}
-
             {/* Summon Button - Primary CTA */}
             {currentStreamPair && (
               <button
@@ -1196,6 +1252,16 @@ export default function PumpRoulettePage() {
               >
                 <Radio className={`h-3.5 w-3.5 ${summonPending ? 'animate-pulse' : ''}`} />
                 <span>Summon</span>
+              </button>
+            )}
+
+            {customRoomId && (
+              <button
+                onClick={handleBackToRandomRoom}
+                className="h-8 px-3 bg-white/10 hover:bg-white/20 backdrop-blur text-white rounded-sm text-xs font-medium transition-colors flex items-center gap-1.5"
+              >
+                <Shuffle className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Random</span>
               </button>
             )}
 
@@ -1290,98 +1356,6 @@ export default function PumpRoulettePage() {
         </div>
       </header>
 
-      {/* Audio controls bar - floating below header */}
-      {(hasActiveAudio || audioEnabled || viewerAudioEnabled || streamerJoinPending) && (
-        <div className="absolute top-14 left-0 right-0 z-30 bg-black/60 backdrop-blur-md border-b border-white/10">
-          <div className="h-10 px-4 flex items-center justify-center gap-2">
-            {/* Audio status indicator */}
-            {(hasActiveAudio || audioEnabled || viewerAudioEnabled) && (
-              <div className="flex items-center gap-2">
-                {viewerAudioEnabled ? (
-                  <>
-                    <div className="flex items-center gap-1.5 text-green-400">
-                      <Headphones className="w-4 h-4" />
-                      <span className="text-xs">Listening</span>
-                    </div>
-                    <span className="text-xs text-green-400">{audioParticipants.length} streamer{audioParticipants.length > 1 ? 's' : ''} active</span>
-                  </>
-                ) : (
-                  <span className="text-xs text-gray-400">
-                    {audioRoomToken ? 'Streamers ready - click Listen to join!' : 'Waiting for streamers to join...'}
-                  </span>
-                )}
-              </div>
-            )}
-
-            {/* Streamer controls */}
-            {userRole === 'streamer' && audioEnabled && (
-              <>
-                <div className="px-2 py-1 bg-red-500 rounded text-white font-semibold animate-pulse text-xs">
-                  LIVE
-                </div>
-                <button
-                  onClick={() => setMicEnabled(!micEnabled)}
-                  className={`px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 ${
-                    !micEnabled
-                      ? 'bg-red-500/20 text-red-500 border border-red-500/30'
-                      : 'bg-white/10 text-white border border-white/20'
-                  }`}
-                >
-                  {!micEnabled ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                  <span>{!micEnabled ? 'Unmute' : 'Mute'}</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setAudioEnabled(false)
-                    window.location.href = '/'
-                  }}
-                  className="px-2 py-1 rounded-sm text-xs font-medium bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-all flex items-center gap-1.5"
-                >
-                  <PhoneOff className="h-4 w-4" />
-                  <span>Leave</span>
-                </button>
-              </>
-            )}
-
-            {/* Listen button for viewers */}
-            {hasActiveAudio && !audioEnabled && !viewerAudioEnabled && userRole === 'viewer' && !showTalkView && roleParam !== 'streamer_a' && roleParam !== 'streamer_b' && (
-              <button
-                onClick={handleJoinAsListener}
-                className="px-3 py-1 rounded-sm text-xs font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 transition-all flex items-center gap-1.5"
-              >
-                <Volume2 className="h-3.5 w-3.5" />
-                <span>Listen to Conversation</span>
-              </button>
-            )}
-
-            {/* Stop listening button */}
-            {viewerAudioEnabled && (
-              <button
-                onClick={() => {
-                  setViewerAudioEnabled(false)
-                  setAudioRoomToken(null)
-                  setAudioRoomId(null)
-                }}
-                className="px-3 py-1 rounded-sm text-xs font-medium bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-all flex items-center gap-1.5"
-              >
-                <VolumeX className="h-3.5 w-3.5" />
-                <span>Stop Listening</span>
-              </button>
-            )}
-
-            {/* Join voice button for streamers */}
-            {streamerJoinPending && !audioEnabled && (
-              <button
-                onClick={handleJoinVoiceAsStreamer}
-                className="px-3 py-1 rounded-sm text-xs font-medium bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30 animate-pulse transition-all flex items-center gap-1.5"
-              >
-                <Mic className="h-4 w-4" />
-                <span>Join Voice</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Next Pair Logo Button - floating in center */}
       {!customRoomId && currentStreamPair && (
@@ -1389,7 +1363,7 @@ export default function PumpRoulettePage() {
           <button
             onClick={handleNextPair}
             disabled={loading}
-            className="group relative p-4 bg-black/40 hover:bg-black/60 backdrop-blur-md rounded-full transition-all duration-300 hover:scale-110"
+            className={`group relative p-4 bg-black/40 hover:bg-black/60 backdrop-blur-md rounded-full transition-all duration-300 hover:scale-110 ${loading ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'}`}
             title="Next Pair"
           >
             <div className={`relative transition-transform duration-1000 ${loading ? 'animate-[spin_1.5s_cubic-bezier(0.68,-0.55,0.265,1.55)_infinite]' : ''}`}>
@@ -1636,15 +1610,84 @@ export default function PumpRoulettePage() {
         </div>
       )}
 
-      {/* Floating footer with status */}
+      {/* Floating footer with status and audio controls */}
       <footer className="absolute bottom-0 left-0 right-0 z-30 bg-black/10 backdrop-blur-xl border-t border-white/5">
-        <div className="h-10 px-4 flex items-center justify-center">
+        <div className="h-10 px-4 flex items-center justify-between">
+          {/* Left side - Audio action buttons */}
+          <div className="flex items-center gap-3">
+            {/* Listen to Conversation Button */}
+            {(() => {
+              const shouldShow = audioRoomToken && !audioEnabled && !viewerAudioEnabled && userRole === 'viewer' && !showTalkView && roleParam !== 'streamer_a' && roleParam !== 'streamer_b'
+
+              console.log('🎧 Listen button visibility check:', {
+                audioRoomToken: !!audioRoomToken,
+                audioEnabled,
+                viewerAudioEnabled,
+                userRole,
+                showTalkView,
+                roleParam,
+                shouldShow
+              })
+
+              return shouldShow && (
+                <button
+                  onClick={handleJoinAsListener}
+                  className="px-3 py-1 rounded text-xs font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 transition-all flex items-center gap-1"
+                >
+                  <Volume2 className="h-3 w-3" />
+                  <span>Listen to Conversation</span>
+                </button>
+              )
+            })()}
+
+            {/* Stop listening button */}
+            {viewerAudioEnabled && (
+              <button
+                onClick={() => {
+                  setViewerAudioEnabled(false)
+                  setAudioRoomToken(null)
+                  setAudioRoomId(null)
+                }}
+                className="px-3 py-1 rounded text-xs font-medium bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-all flex items-center gap-1"
+              >
+                <VolumeX className="h-3 w-3" />
+                <span>Stop Listening</span>
+              </button>
+            )}
+
+            {/* Join voice button for streamers */}
+            {streamerJoinPending && !audioEnabled && (
+              <button
+                onClick={handleJoinVoiceAsStreamer}
+                className="px-3 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30 animate-pulse transition-all flex items-center gap-1"
+              >
+                <Mic className="h-3 w-3" />
+                <span>Join Voice</span>
+              </button>
+            )}
+          </div>
+
+          {/* Center - Status info */}
           <div className="text-xs text-gray-400">
             {summonPending ? (
               <div className="flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 <span>Summoning streamers...</span>
               </div>
+            ) : viewerAudioEnabled ? (
+              <div className="flex items-center gap-1.5 text-green-400">
+                <Headphones className="w-3 h-3" />
+                <span>Listening</span>
+              </div>
+            ) : audioRoomToken && userRole !== 'streamer' ? (
+              <>
+                <span>Streamers ready - click Listen to join!</span>
+                {console.log('📢 Showing "Streamers ready" message:', {
+                  audioRoomToken: !!audioRoomToken,
+                  userRole,
+                  condition: audioRoomToken && userRole !== 'streamer'
+                })}
+              </>
             ) : audioEnabled && !hasActiveAudio ? (
               <span>Waiting for streamers to join...</span>
             ) : hasActiveAudio && audioParticipants.length > 0 ? (
@@ -1655,6 +1698,9 @@ export default function PumpRoulettePage() {
               <span>Connecting...</span>
             )}
           </div>
+
+          {/* Right side - placeholder for balance */}
+          <div className="w-20"></div>
         </div>
       </footer>
 
@@ -1666,8 +1712,9 @@ export default function PumpRoulettePage() {
           livekitUrl={audioEndpoint || 'wss://pump-udxzob1q.livekit.cloud'}
           role={userRole}
           onParticipantsChange={(participants) => {
-            console.log('🎙️ Participants updated:', participants)
+            console.log('🎙️ Participants updated from AudioRoom:', participants)
             setAudioParticipants(participants)
+            setHasActiveAudio(participants.length > 0)
           }}
         />
       )}
@@ -1931,6 +1978,7 @@ export default function PumpRoulettePage() {
           </div>
         </div>
       )}
+
     </div>
   )
 }

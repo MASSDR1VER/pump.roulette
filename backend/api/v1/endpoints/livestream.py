@@ -14,15 +14,16 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/info/{token_mint}")
-async def get_livestream_info(token_mint: str) -> Dict[str, Any]:
+async def get_livestream_info(token_mint: str, user_id: str = None) -> Dict[str, Any]:
     """
     Get livestream information for a token.
 
     Args:
         token_mint: Token mint address
+        user_id: Unique user identifier for personalized token generation
 
     Returns:
-        Livestream information including stream ID
+        Livestream information including stream ID and user-specific access token
     """
     url = f"https://livestream-api.pump.fun/livestream?mintId={token_mint}"
 
@@ -46,7 +47,8 @@ async def get_livestream_info(token_mint: str) -> Dict[str, Any]:
                         stream_id = str(data['id'])
                         access_token = client.generate_access_token(
                             token_mint=token_mint,
-                            stream_id=stream_id
+                            stream_id=stream_id,
+                            user_id=user_id
                         )
 
                         data['access_token'] = access_token
@@ -67,13 +69,14 @@ async def get_livestream_info(token_mint: str) -> Dict[str, Any]:
 
 
 @router.get("/test-token/{token_mint}/{stream_id}")
-async def test_jwt_token(token_mint: str, stream_id: str) -> Dict[str, Any]:
+async def test_jwt_token(token_mint: str, stream_id: str, user_id: str = None) -> Dict[str, Any]:
     """
     Test JWT token generation for debugging.
 
     Args:
         token_mint: Token mint address
         stream_id: Stream ID
+        user_id: Unique user identifier for personalized token generation
 
     Returns:
         Generated JWT token and decoded payload
@@ -85,7 +88,8 @@ async def test_jwt_token(token_mint: str, stream_id: str) -> Dict[str, Any]:
     # Generate token
     access_token = client.generate_access_token(
         token_mint=token_mint,
-        stream_id=stream_id
+        stream_id=stream_id,
+        user_id=user_id
     )
 
     # Decode to show payload

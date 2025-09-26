@@ -290,13 +290,14 @@ async def refresh_streams(
 
 
 @router.get("/access-token/{mint_id}")
-async def get_stream_access_token(mint_id: str) -> Dict[str, Any]:
+async def get_stream_access_token(mint_id: str, user_id: str = None) -> Dict[str, Any]:
     """
     Get a new access token for a specific stream.
     Each user should get their own token to allow multiple viewers.
 
     Args:
         mint_id (str): The token mint address (token_address)
+        user_id (str): Unique user identifier for personalized token generation
 
     Returns:
         Dict containing access token and room info

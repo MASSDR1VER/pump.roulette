@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Room, RoomEvent, Track, VideoPresets, RemoteTrack } from 'livekit-client'
-import { Loader2, Volume2, VolumeX, Users, Copy, ExternalLink, Heart, Share2, Flame, Send, Globe, AlertTriangle, CheckCircle } from 'lucide-react'
+import { Loader2, Volume2, VolumeX, Users, Copy, ExternalLink, Heart, Share2, Flame, Send, Globe, AlertTriangle, CheckCircle, Mic, MicOff, PhoneOff } from 'lucide-react'
 
 interface StreamData {
   stream_id: string
@@ -41,11 +41,16 @@ interface LiveKitStreamProps {
   streamId: 'stream1' | 'stream2'
   muted: boolean
   onMuteChange?: (muted: boolean) => void
+  // Streamer controls props
+  isStreamer?: boolean
+  micEnabled?: boolean
+  onMicToggle?: () => void
+  onLeaveStream?: () => void
 }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : 'https://app.pump-roulette.com/api/v1'
 
-export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKitStreamProps) {
+export function LiveKitStream({ stream, streamId, muted, onMuteChange, isStreamer, micEnabled, onMicToggle, onLeaveStream }: LiveKitStreamProps) {
   // Debug log to check if thumbnail is being passed
   console.log(`🖼️ [${streamId}] LiveKitStream received:`, {
     token_name: stream?.token_name,
@@ -116,12 +121,6 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
         return
       }
 
-      // Check if already connected to the correct room
-      if (roomRef.current?.state === 'connected' && currentToken === stream.access_token) {
-        console.log(`[${streamId}] Already connected to room with same token, skipping...`)
-        return
-      }
-
       connectionAttemptRef.current = true
 
       try {
@@ -129,32 +128,53 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
         setIsLoading(true)
         setError(null)
 
-        let token = stream.access_token
+        // Always fetch fresh user-specific token for each connection
+        // to ensure each user gets their own LiveKit participant
+        console.log(`[${streamId}] Fetching new access token for:`, stream.token_address)
 
-        // Always fetch fresh token for each stream
-        // to ensure we get the correct room for this specific stream
-        if (!token) {
-          console.log(`[${streamId}] Fetching new access token for:`, stream.token_address)
-          const response = await fetch(`${API_BASE_URL}/streams/access-token/${stream.token_address}`, {
-            signal: abortControllerRef.current?.signal
-          })
-
-          if (!response.ok) {
-            if (response.status === 404) {
-              throw new Error('Stream not available or not live')
+        // Generate unique user ID for each viewer
+        const getUserId = () => {
+          // Try to get wallet address from localStorage (if user is authenticated)
+          const authToken = localStorage.getItem('auth_token')
+          if (authToken) {
+            try {
+              // Decode the JWT to get wallet address
+              const payload = JSON.parse(atob(authToken.split('.')[1]))
+              return payload.wallet_address || payload.sub
+            } catch (e) {
+              // If can't decode, fall back to generating unique session ID
             }
-            throw new Error(`Failed to get access token: ${response.statusText}`)
           }
 
-          const data = await response.json()
-
-          if (!data.access_token) {
-            throw new Error('No access token received from server')
+          // For guests, generate or get existing session ID
+          let sessionId = localStorage.getItem('viewer_session_id')
+          if (!sessionId) {
+            sessionId = `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+            localStorage.setItem('viewer_session_id', sessionId)
           }
-
-          token = data.access_token
-          console.log(`[${streamId}] Got fresh token for ${stream.token_address}`)
+          return sessionId
         }
+
+        const userId = getUserId()
+        const response = await fetch(`${API_BASE_URL}/streams/access-token/${stream.token_address}?user_id=${encodeURIComponent(userId)}`, {
+          signal: abortControllerRef.current?.signal
+        })
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            throw new Error('Stream not available or not live')
+          }
+          throw new Error(`Failed to get access token: ${response.statusText}`)
+        }
+
+        const data = await response.json()
+
+        if (!data.access_token) {
+          throw new Error('No access token received from server')
+        }
+
+        const token = data.access_token
+        console.log(`[${streamId}] Got fresh token for ${stream.token_address}`)
 
         // Check again if this is still the current stream before connecting
         if (streamKeyRef.current !== streamKey) {
@@ -162,11 +182,9 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
           return
         }
 
-        // Only connect if token is different or no room exists
-        if (token && (token !== currentToken || !roomRef.current)) {
-          setCurrentToken(token)
-          await connectToRoom(token, streamKey)
-        }
+        // Always connect with fresh token
+        setCurrentToken(token)
+        await connectToRoom(token, streamKey)
 
       } catch (error: any) {
         // Ignore abort errors
@@ -702,6 +720,33 @@ export function LiveKitStream({ stream, streamId, muted, onMuteChange }: LiveKit
             </a>
           )}
         </div>
+
+        {/* Streamer controls */}
+        {isStreamer && (
+          <div className="mt-3 pt-3 border-t border-white/10 flex items-center justify-center gap-2">
+            <div className="px-2 py-1 bg-red-500 rounded text-white font-semibold animate-pulse text-xs">
+              LIVE
+            </div>
+            <button
+              onClick={onMicToggle}
+              className={`px-2 py-1 rounded-sm text-xs font-medium transition-all flex items-center gap-1.5 ${
+                !micEnabled
+                  ? 'bg-red-500/20 text-red-500 border border-red-500/30'
+                  : 'bg-white/10 text-white border border-white/20'
+              }`}
+            >
+              {!micEnabled ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              <span>{!micEnabled ? 'Unmute' : 'Mute'}</span>
+            </button>
+            <button
+              onClick={onLeaveStream}
+              className="px-2 py-1 rounded-sm text-xs font-medium bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-all flex items-center gap-1.5"
+            >
+              <PhoneOff className="h-4 w-4" />
+              <span>Leave</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

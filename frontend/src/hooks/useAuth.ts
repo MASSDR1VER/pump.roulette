@@ -59,6 +59,13 @@ export function useAuth() {
           setUser(userData)
           // Validate token to ensure it's still valid
           validateToken(token)
+
+          // Trigger WebSocket reconnection after successful auth
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('auth:refresh-connection', {
+              detail: { reason: 'login', user: userData }
+            }))
+          }, 100) // Small delay to ensure user state is updated
         }
       }
 
@@ -207,6 +214,13 @@ export function useAuth() {
         }
         setUser(verifyData.user)
         console.log('Wallet authenticated successfully')
+
+        // Trigger WebSocket reconnection after successful wallet connection
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('auth:refresh-connection', {
+            detail: { reason: 'wallet-connect', user: verifyData.user }
+          }))
+        }, 100)
       } else {
         throw new Error('Authentication failed')
       }

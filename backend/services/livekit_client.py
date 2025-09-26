@@ -68,22 +68,28 @@ class LiveKitClient:
             logger.error(f"Error fetching livestream info: {e}")
             return None
 
-    def generate_access_token(self, token_mint: str, stream_id: str) -> str:
+    def generate_access_token(self, token_mint: str, stream_id: str, user_id: str = None) -> str:
         """
         Generate JWT access token for LiveKit.
 
         Args:
             token_mint: Token mint address
             stream_id: Stream ID
+            user_id: Unique user identifier (wallet address, guest ID, etc.)
 
         Returns:
             JWT access token
         """
         room_id = f"{token_mint}:{stream_id}"
 
-        # Generate anonymous sub ID
-        import uuid
-        sub_id = uuid.uuid4().hex[:8]
+        # Generate user-specific sub ID
+        if user_id:
+            # Use user_id for authenticated users or specific guest IDs
+            sub_id = user_id[:12] if len(user_id) > 12 else user_id
+        else:
+            # Fallback to random ID for backwards compatibility
+            import uuid
+            sub_id = uuid.uuid4().hex[:8]
 
         # Token payload matching Pump.fun format exactly
         payload = {

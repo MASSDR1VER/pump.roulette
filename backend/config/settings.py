@@ -87,6 +87,7 @@ class Settings(BaseSettings):
 
     # Pump.fun API authentication for notifications
     PUMPFUN_AUTH_TOKEN: str = ""  # Auth token for sending pump.fun replies
+    PUMPFUN_FULL_COOKIES: Optional[str] = None  # Full cookie string with CloudFlare bypass
     PUMPFUN_CHAT_MESSAGE: str = "🎤 Voice battle invite! Check comments for link"
     PUMPFUN_COMMENT_MESSAGE: str = "🎤 Join voice battle: {link}"
 

@@ -11,9 +11,7 @@ import subprocess
 import os
 import aiohttp
 from typing import Dict
-from dotenv import load_dotenv
-
-load_dotenv()
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +27,10 @@ class PumpFunWebSocketService:
         # Dynamically resolve path to Node.js script
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.node_script_path = os.path.join(current_dir, '..', '..', 'pump-fun-chat-mcp', 'send_pump_message.js')
-        self.auth_token = os.getenv('PUMPFUN_AUTH_TOKEN')
-        self.chat_message_template = os.getenv('PUMPFUN_CHAT_MESSAGE', '🎤 Voice battle invite! Check comments for link')
-        self.comment_message_template = os.getenv('PUMPFUN_COMMENT_MESSAGE', '🎤 Join voice battle: {link}')
+        self.auth_token = settings.PUMPFUN_AUTH_TOKEN
+        self.full_cookie_string = settings.PUMPFUN_FULL_COOKIES
+        self.chat_message_template = settings.PUMPFUN_CHAT_MESSAGE
+        self.comment_message_template = settings.PUMPFUN_COMMENT_MESSAGE
 
     async def send_chat_message(
         self,
@@ -124,7 +123,7 @@ class PumpFunWebSocketService:
                 'sec-fetch-mode': 'cors',
                 'sec-fetch-site': 'same-site',
                 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-                'Cookie': f'auth_token={self.auth_token}'
+                'Cookie': self.full_cookie_string or f'auth_token={self.auth_token}'
             }
 
             data = {

@@ -15,6 +15,7 @@ import aiohttp
 from config.settings import settings
 from services.pumpfun_client import PumpFunClient
 from services.livekit_client import LiveKitClient
+from services.pumpfun_websocket_service import PumpFunWebSocketService
 from models.token import Token
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class StreamManager:
             db_url=f"{settings.MONGODB_URL}/{settings.MONGODB_DB_NAME}"
         )
         self.livekit_client = LiveKitClient()
+        self.pumpfun_websocket_service = PumpFunWebSocketService()
         self.is_initialized = False
         self.recent_pairs = []  # Track recent pairs to avoid repetition
         self.max_recent_pairs = 5  # Keep track of last 5 pairs
@@ -107,8 +109,7 @@ class StreamManager:
                     "market_cap": token.market_cap,
                     "usd_market_cap": token.usd_market_cap,
                     "created_at": token.created_timestamp.isoformat(),
-                    "room_id": livekit_info.get("room_id") if livekit_info else None,
-                    "access_token": livekit_info.get("access_token") if livekit_info else None
+                    "room_id": livekit_info.get("room_id") if livekit_info else None
                 })
 
             return streams
@@ -265,6 +266,21 @@ class StreamManager:
                                 token2_data.get('mint')
                             )
 
+                            # Send notifications to both streamers
+                            try:
+                                room_id = pair_data.get('room_id')
+                                stream_1_mint = token1_data.get('mint')
+                                stream_2_mint = token2_data.get('mint')
+
+                                if room_id and stream_1_mint and stream_2_mint:
+                                    logger.info(f"🔔 Sending notifications to streamers: {stream_1_mint[:8]}... and {stream_2_mint[:8]}...")
+                                    notification_results = await self.pumpfun_websocket_service.notify_both_streamers(
+                                        stream_1_mint, stream_2_mint, room_id
+                                    )
+                                    logger.info(f"📢 Notification results: {notification_results}")
+                            except Exception as e:
+                                logger.error(f"❌ Failed to send notifications: {e}")
+
                             return pair_data
                         else:
                             logger.warning(f"⚠️ Attempt {attempt + 1}: Streams had duplicate room IDs, retrying with different streams...")
@@ -380,7 +396,6 @@ class StreamManager:
                     "thumbnail_url": token1.image_uri or f"{settings.PUMP_FUN_BASE_URL}/placeholder.png",
                     "is_live": token1.is_currently_live,
                     "room_id": livekit_info_1.get("room_id") if livekit_info_1 else None,
-                    "access_token": livekit_info_1.get("access_token") if livekit_info_1 else None,
                     # Market data
                     "market_cap": getattr(token1, 'market_cap', 0),
                     "usd_market_cap": getattr(token1, 'usd_market_cap', 0),
@@ -415,7 +430,6 @@ class StreamManager:
                     "thumbnail_url": token2.image_uri or f"{settings.PUMP_FUN_BASE_URL}/placeholder.png",
                     "is_live": token2.is_currently_live,
                     "room_id": livekit_info_2.get("room_id") if livekit_info_2 else None,
-                    "access_token": livekit_info_2.get("access_token") if livekit_info_2 else None,
                     # Market data
                     "market_cap": getattr(token2, 'market_cap', 0),
                     "usd_market_cap": getattr(token2, 'usd_market_cap', 0),
@@ -588,7 +602,6 @@ class StreamManager:
                     "thumbnail_url": getattr(token1, 'thumbnail', None) or token1.image_uri or f"{settings.PUMP_FUN_BASE_URL}/placeholder.png",
                     "is_live": token1.is_currently_live,
                     "room_id": livekit_info_1.get("room_id") if livekit_info_1 else None,
-                    "access_token": livekit_info_1.get("access_token") if livekit_info_1 else None,
                     "market_cap": getattr(token1, 'market_cap', 0),
                     "usd_market_cap": getattr(token1, 'usd_market_cap', 0),
                     "symbol": getattr(token1, 'symbol', 'TOKEN'),
@@ -607,7 +620,6 @@ class StreamManager:
                     "thumbnail_url": token1_data.get('thumbnail') or token1_data.get('image_uri', f"{settings.PUMP_FUN_BASE_URL}/placeholder.png"),
                     "is_live": token1_data.get('is_currently_live', False),
                     "room_id": livekit_info_1.get("room_id") if livekit_info_1 else None,
-                    "access_token": livekit_info_1.get("access_token") if livekit_info_1 else None,
                     "market_cap": token1_data.get('market_cap', 0),
                     "usd_market_cap": token1_data.get('usd_market_cap', 0),
                     "symbol": token1_data.get('symbol', 'TOKEN'),
@@ -627,7 +639,6 @@ class StreamManager:
                     "thumbnail_url": getattr(token2, 'thumbnail', None) or token2.image_uri or f"{settings.PUMP_FUN_BASE_URL}/placeholder.png",
                     "is_live": token2.is_currently_live,
                     "room_id": livekit_info_2.get("room_id") if livekit_info_2 else None,
-                    "access_token": livekit_info_2.get("access_token") if livekit_info_2 else None,
                     "market_cap": getattr(token2, 'market_cap', 0),
                     "usd_market_cap": getattr(token2, 'usd_market_cap', 0),
                     "symbol": getattr(token2, 'symbol', 'TOKEN'),
@@ -646,18 +657,30 @@ class StreamManager:
                     "thumbnail_url": token2_data.get('thumbnail') or token2_data.get('image_uri', f"{settings.PUMP_FUN_BASE_URL}/placeholder.png"),
                     "is_live": token2_data.get('is_currently_live', False),
                     "room_id": livekit_info_2.get("room_id") if livekit_info_2 else None,
-                    "access_token": livekit_info_2.get("access_token") if livekit_info_2 else None,
                     "market_cap": token2_data.get('market_cap', 0),
                     "usd_market_cap": token2_data.get('usd_market_cap', 0),
                     "symbol": token2_data.get('symbol', 'TOKEN'),
                     "description": token2_data.get('description', None),
                 }
 
-            return {
+            pair_data = {
                 "room_id": room_id,
                 "stream_1": stream1_data,
                 "stream_2": stream2_data
             }
+
+            # Send notifications to both streamers
+            try:
+                if mint1 and mint2 and room_id:
+                    logger.info(f"🔔 Sending notifications for custom pair: {mint1[:8]}... and {mint2[:8]}...")
+                    notification_results = await self.pumpfun_websocket_service.notify_both_streamers(
+                        mint1, mint2, room_id
+                    )
+                    logger.info(f"📢 Custom pair notification results: {notification_results}")
+            except Exception as e:
+                logger.error(f"❌ Failed to send custom pair notifications: {e}")
+
+            return pair_data
 
         except Exception as e:
             logger.error(f"Error getting custom pair: {e}")
@@ -705,7 +728,6 @@ class StreamManager:
                     "thumbnail_url": token1_data.get('image_uri', ''),
                     "is_live": True,  # We know it's live from validation
                     "room_id": livekit_info_1.get("room_id") if livekit_info_1 else None,
-                    "access_token": livekit_info_1.get("access_token") if livekit_info_1 else None,
                     "market_cap": token1_data.get('market_cap', 0),
                     "usd_market_cap": token1_data.get('usd_market_cap', 0),
                     "symbol": token1_data.get('symbol', 'TOKEN'),
@@ -722,7 +744,6 @@ class StreamManager:
                     "thumbnail_url": token2_data.get('image_uri', ''),
                     "is_live": True,  # We know it's live from validation
                     "room_id": livekit_info_2.get("room_id") if livekit_info_2 else None,
-                    "access_token": livekit_info_2.get("access_token") if livekit_info_2 else None,
                     "market_cap": token2_data.get('market_cap', 0),
                     "usd_market_cap": token2_data.get('usd_market_cap', 0),
                     "symbol": token2_data.get('symbol', 'TOKEN'),

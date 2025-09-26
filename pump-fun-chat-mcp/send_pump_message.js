@@ -23,7 +23,8 @@ if (!token || !message || !authToken) {
 const client = new PumpChatClient({
     roomId: token,
     username: 'PumpRoulette',
-    messageHistoryLimit: 10
+    messageHistoryLimit: 10,
+    authToken: authToken
 });
 
 client.on('connected', () => {
